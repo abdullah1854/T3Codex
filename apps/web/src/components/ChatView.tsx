@@ -24,11 +24,16 @@ import {
 } from "@t3tools/contracts";
 import { applyClaudePromptEffortPrefix, normalizeModelSlug } from "@t3tools/shared/model";
 import { truncate } from "@t3tools/shared/String";
+import { Schema } from "effect";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useDebouncedValue } from "@tanstack/react-pacer";
 import { useNavigate, useSearch } from "@tanstack/react-router";
-import { gitBranchesQueryOptions, gitCreateWorktreeMutationOptions } from "~/lib/gitReactQuery";
+import {
+  gitBranchesQueryOptions,
+  gitCreateWorktreeMutationOptions,
+  gitStatusQueryOptions,
+} from "~/lib/gitReactQuery";
 import {
   projectQueryKeys,
   projectReadTextFileQueryOptions,
@@ -164,6 +169,7 @@ import { selectThreadTerminalState, useTerminalStateStore } from "../terminalSta
 import { ComposerPromptEditor, type ComposerPromptEditorHandle } from "./ComposerPromptEditor";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { DoctorDialog } from "./chat/DoctorDialog";
+import { AgentWorkbenchDialog } from "./chat/AgentWorkbenchDialog";
 import { MessagesTimeline } from "./chat/MessagesTimeline";
 import { ChatHeader } from "./chat/ChatHeader";
 import { ContextWindowMeter } from "./chat/ContextWindowMeter";
@@ -207,6 +213,14 @@ import {
   type WorkspaceCodexScaffoldTarget,
 } from "../workspaceCodex";
 import {
+  deriveReviewReadiness,
+  deriveVerificationSummary,
+  deriveVerificationScripts,
+  selectLatestChangedFiles,
+  type VerificationRunRecord,
+  type VerificationScriptDefinition,
+} from "../agentWorkbench";
+import {
   buildExpiredTerminalContextToastCopy,
   buildLocalDraftThread,
   buildTemporaryWorktreeBranchName,
@@ -214,6 +228,7 @@ import {
   collectUserMessageBlobPreviewUrls,
   createLocalDispatchSnapshot,
   deriveComposerSendState,
+  findNextQueuedComposerSubmissionToDispatch,
   hasServerAcknowledgedLocalDispatch,
   LAST_INVOKED_SCRIPT_BY_PROJECT_KEY,
   LastInvokedScriptByProjectSchema,
@@ -242,11 +257,45 @@ const EMPTY_PROJECT_ENTRIES: ProjectEntry[] = [];
 const EMPTY_AVAILABLE_EDITORS: EditorId[] = [];
 const EMPTY_PROVIDERS: ServerProvider[] = [];
 const EMPTY_PENDING_USER_INPUT_ANSWERS: Record<string, PendingUserInputDraftAnswer> = {};
+const AUTO_VERIFY_BY_PROJECT_SCHEMA = Schema.Record(Schema.String, Schema.Boolean);
+const AUTO_VERIFY_BY_PROJECT_STORAGE_KEY = "t3code:auto-verify-by-project:v1";
 
 type ThreadPlanCatalogEntry = Pick<Thread, "id" | "proposedPlans">;
 
+interface ThreadVerificationState {
+  autoRunTriggeredForTurnId: string | null;
+  requiredTurnId: string | null;
+  runs: VerificationRunRecord[];
+}
+
 function joinProjectRelativePath(cwd: string, relativePath: string): string {
   return cwd.endsWith("/") ? `${cwd}${relativePath}` : `${cwd}/${relativePath}`;
+}
+
+function buildVerificationCommand(command: string, runId: string): string {
+  return `${command}
+__t3_verify_status=$?
+printf '\\n__T3_VERIFY__:${runId}:%s\\n' "$__t3_verify_status"`;
+}
+
+function updateThreadVerificationState(
+  stateByThreadId: Record<string, ThreadVerificationState>,
+  threadId: string,
+  updater: (state: ThreadVerificationState) => ThreadVerificationState,
+) {
+  const current = stateByThreadId[threadId] ?? {
+    autoRunTriggeredForTurnId: null,
+    requiredTurnId: null,
+    runs: [],
+  };
+  const next = updater(current);
+  if (next === current) {
+    return stateByThreadId;
+  }
+  return {
+    ...stateByThreadId,
+    [threadId]: next,
+  };
 }
 
 function formatWorkspaceWebSearchInstruction(mode: "cached" | "disabled" | "live"): string {
@@ -471,6 +520,7 @@ function useLocalDispatchState(input: {
 }
 
 export default function ChatView({ threadId }: ChatViewProps) {
+  const threads = useStore((store) => store.threads);
   const serverThread = useThreadById(threadId);
   const setStoreThreadError = useStore((store) => store.setError);
   const setStoreThreadBranch = useStore((store) => store.setThreadBranch);
@@ -582,8 +632,13 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const [expandedWorkGroups, setExpandedWorkGroups] = useState<Record<string, boolean>>({});
   const [planSidebarOpen, setPlanSidebarOpen] = useState(false);
   const [workProfilePanelOpen, setWorkProfilePanelOpen] = useState(false);
+  const [agentWorkbenchOpen, setAgentWorkbenchOpen] = useState(false);
   const [doctorDialogOpen, setDoctorDialogOpen] = useState(false);
   const [handoffDialogOpen, setHandoffDialogOpen] = useState(false);
+  const [pendingSessionTakeover, setPendingSessionTakeover] = useState<{
+    requestedAt: string;
+    threadId: string;
+  } | null>(null);
   const [isComposerFooterCompact, setIsComposerFooterCompact] = useState(false);
   const [isComposerPrimaryActionsCompact, setIsComposerPrimaryActionsCompact] = useState(false);
   // Tracks whether the user explicitly dismissed the sidebar for the active turn.
@@ -612,6 +667,14 @@ export default function ChatView({ threadId }: ChatViewProps) {
     {},
     LastInvokedScriptByProjectSchema,
   );
+  const [autoVerifyByProjectId, setAutoVerifyByProjectId] = useLocalStorage(
+    AUTO_VERIFY_BY_PROJECT_STORAGE_KEY,
+    {},
+    AUTO_VERIFY_BY_PROJECT_SCHEMA,
+  );
+  const [verificationStateByThreadId, setVerificationStateByThreadId] = useState<
+    Record<string, ThreadVerificationState>
+  >({});
   const messagesScrollRef = useRef<HTMLDivElement>(null);
   const [messagesScrollElement, setMessagesScrollElement] = useState<HTMLDivElement | null>(null);
   const shouldAutoScrollRef = useRef(true);
@@ -639,9 +702,14 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const attachmentPreviewHandoffByMessageIdRef = useRef<Record<string, string[]>>({});
   const attachmentPreviewHandoffTimeoutByMessageIdRef = useRef<Record<string, number>>({});
   const sendInFlightRef = useRef(false);
+  const verificationRunLookupRef = useRef<Record<string, { runId: string; threadId: string }>>({});
+  const verificationOutputBufferRef = useRef<Record<string, string>>({});
   const processingQueuedComposerSubmissionIdRef = useRef<string | null>(null);
   const dragDepthRef = useRef(0);
   const terminalOpenByThreadRef = useRef<Record<string, boolean>>({});
+  const allQueuedComposerSubmissions = useQueuedComposerSubmissionStore(
+    (store) => store.queuedComposerSubmissions,
+  );
   const queuedComposerSubmissions = useQueuedComposerSubmissions(threadId);
   const enqueueQueuedComposerSubmission = useQueuedComposerSubmissionStore(
     (store) => store.enqueueQueuedComposerSubmission,
@@ -786,6 +854,40 @@ export default function ChatView({ threadId }: ChatViewProps) {
     [activeThread?.activities],
   );
   const latestTurnSettled = isLatestTurnSettled(activeLatestTurn, activeThread?.session ?? null);
+  const verificationScripts = useMemo(
+    () => deriveVerificationScripts(activeProject?.scripts ?? []),
+    [activeProject?.scripts],
+  );
+  const latestChangedFiles = useMemo(
+    () =>
+      selectLatestChangedFiles({
+        latestTurnId: activeLatestTurn?.turnId ?? null,
+        turnDiffSummaries: activeThread?.turnDiffSummaries ?? [],
+      }),
+    [activeLatestTurn?.turnId, activeThread?.turnDiffSummaries],
+  );
+  const activeVerificationState = activeThreadId
+    ? (verificationStateByThreadId[activeThreadId] ?? {
+        autoRunTriggeredForTurnId: null,
+        requiredTurnId: null,
+        runs: [],
+      })
+    : {
+        autoRunTriggeredForTurnId: null,
+        requiredTurnId: null,
+        runs: [],
+      };
+  const autoVerifyEnabled =
+    activeProject !== undefined ? Boolean(autoVerifyByProjectId[activeProject.id]) : false;
+  const verificationSummary = useMemo(
+    () =>
+      deriveVerificationSummary({
+        requiredTurnId: activeVerificationState.requiredTurnId,
+        runs: activeVerificationState.runs,
+        scripts: verificationScripts,
+      }),
+    [activeVerificationState.requiredTurnId, activeVerificationState.runs, verificationScripts],
+  );
   const workspaceCodexEntriesQuery = useQuery(
     projectSearchEntriesQueryOptions({
       cwd: activeProject?.cwd ?? null,
@@ -903,6 +1005,18 @@ export default function ChatView({ threadId }: ChatViewProps) {
     },
     [activeProject?.cwd, openProjectPathInPreferredEditor, queryClient],
   );
+  const setAutoVerifyEnabledForProject = useCallback(
+    (enabled: boolean) => {
+      if (!activeProject) {
+        return;
+      }
+      setAutoVerifyByProjectId((current) => ({
+        ...current,
+        [activeProject.id]: enabled,
+      }));
+    },
+    [activeProject, setAutoVerifyByProjectId],
+  );
   const toggleWorkspaceDefaultsForDraft = useCallback(() => {
     if (!workspaceDefaultsAvailable) {
       return;
@@ -1000,6 +1114,52 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const closePullRequestDialog = useCallback(() => {
     setPullRequestDialogState(null);
   }, []);
+
+  const takeOverSession = useCallback(async () => {
+    const api = readNativeApi();
+    if (!api || !activeThread) {
+      return;
+    }
+
+    const sessionStatus = activeThread.session?.orchestrationStatus ?? null;
+    const hasRunningTurn =
+      sessionStatus === "running" && activeThread.session?.activeTurnId !== undefined;
+
+    if (hasRunningTurn || sessionStatus === "starting") {
+      const confirmed = await api.dialogs.confirm(
+        [
+          "This will stop the current provider session and reattach a fresh one.",
+          hasRunningTurn
+            ? "Any active run in this thread will be interrupted before the session is restarted."
+            : "The session is still starting and will be restarted.",
+          "",
+          "Continue with session takeover?",
+        ].join("\n"),
+      );
+      if (!confirmed) {
+        return;
+      }
+    }
+
+    const createdAt = new Date().toISOString();
+    setPendingSessionTakeover({ threadId: activeThread.id, requestedAt: createdAt });
+    try {
+      await api.orchestration.dispatchCommand({
+        type: "thread.session.takeover",
+        commandId: newCommandId(),
+        threadId: activeThread.id,
+        createdAt,
+      });
+    } catch (error) {
+      setPendingSessionTakeover(null);
+      toastManager.add({
+        type: "error",
+        title: "Failed to take over session",
+        description:
+          error instanceof Error ? error.message : "Session takeover could not be started.",
+      });
+    }
+  }, [activeThread]);
 
   const openOrReuseProjectDraftThread = useCallback(
     async (input: { branch: string; worktreePath: string | null; envMode: DraftThreadEnvMode }) => {
@@ -1589,6 +1749,66 @@ export default function ChatView({ threadId }: ChatViewProps) {
   );
   const effectivePathQuery = pathTriggerQuery.length > 0 ? debouncedPathQuery : "";
   const branchesQuery = useQuery(gitBranchesQueryOptions(gitCwd));
+  const gitStatusQuery = useQuery(gitStatusQueryOptions(gitCwd));
+  const gitStatus = gitStatusQuery.data ?? null;
+  const currentGitBranchMeta =
+    branchesQuery.data?.branches.find((branch) => branch.current) ?? null;
+  const reviewReadiness = useMemo(
+    () =>
+      deriveReviewReadiness({
+        activeBranch: gitStatus?.branch ?? activeThread?.branch ?? null,
+        activeWorktreePath: activeThread?.worktreePath ?? null,
+        changedFiles: latestChangedFiles,
+        gitStatus,
+        isCurrentBranchDefault: currentGitBranchMeta?.isDefault ?? false,
+        verificationSummary,
+        verificationScripts,
+      }),
+    [
+      activeThread?.branch,
+      activeThread?.worktreePath,
+      currentGitBranchMeta?.isDefault,
+      gitStatus,
+      latestChangedFiles,
+      verificationScripts,
+      verificationSummary,
+    ],
+  );
+  const sessionTakeoverPending = useMemo(() => {
+    if (!pendingSessionTakeover || pendingSessionTakeover.threadId !== activeThread?.id) {
+      return false;
+    }
+    return (() => {
+      const updatedAt = activeThread?.session?.updatedAt;
+      const status = activeThread?.session?.orchestrationStatus ?? null;
+      if (!updatedAt || status === "starting") {
+        return true;
+      }
+      const requestedAtMs = Date.parse(pendingSessionTakeover.requestedAt);
+      const updatedAtMs = Date.parse(updatedAt);
+      if (Number.isNaN(requestedAtMs) || Number.isNaN(updatedAtMs)) {
+        return true;
+      }
+      return updatedAtMs < requestedAtMs;
+    })();
+  }, [
+    activeThread?.id,
+    activeThread?.session?.orchestrationStatus,
+    activeThread?.session?.updatedAt,
+    pendingSessionTakeover,
+  ]);
+
+  useEffect(() => {
+    if (!pendingSessionTakeover) {
+      return;
+    }
+    if (pendingSessionTakeover.threadId !== activeThread?.id) {
+      return;
+    }
+    if (!sessionTakeoverPending) {
+      setPendingSessionTakeover(null);
+    }
+  }, [activeThread?.id, pendingSessionTakeover, sessionTakeoverPending]);
   const keybindings = serverConfigQuery.data?.keybindings ?? EMPTY_KEYBINDINGS;
   const availableEditors = serverConfigQuery.data?.availableEditors ?? EMPTY_AVAILABLE_EDITORS;
   const modelOptionsByProvider = useMemo(
@@ -1934,6 +2154,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
     async (
       script: ProjectScript,
       options?: {
+        commandOverride?: string;
         cwd?: string;
         env?: Record<string, string>;
         worktreePath?: string | null;
@@ -1942,7 +2163,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
       },
     ) => {
       const api = readNativeApi();
-      if (!api || !activeThreadId || !activeProject || !activeThread) return;
+      if (!api || !activeThreadId || !activeProject || !activeThread) return null;
       if (options?.rememberAsLastInvoked !== false) {
         setLastInvokedScriptByProjectId((current) => {
           if (current[activeProject.id] === script.id) return current;
@@ -1997,13 +2218,18 @@ export default function ChatView({ threadId }: ChatViewProps) {
         await api.terminal.write({
           threadId: activeThreadId,
           terminalId: targetTerminalId,
-          data: `${script.command}\r`,
+          data: `${options?.commandOverride ?? script.command}\r`,
         });
+        return {
+          cwd: targetCwd,
+          terminalId: targetTerminalId,
+        };
       } catch (error) {
         setThreadError(
           activeThreadId,
           error instanceof Error ? error.message : `Failed to run script "${script.name}".`,
         );
+        return null;
       }
     },
     [
@@ -2060,6 +2286,266 @@ export default function ChatView({ threadId }: ChatViewProps) {
     pendingPullRequestSetupRequest,
     runProjectScript,
   ]);
+  useEffect(() => {
+    if (!activeThreadId || !activeLatestTurn?.turnId || !latestTurnSettled) {
+      return;
+    }
+    if (verificationScripts.length === 0 || latestChangedFiles.length === 0) {
+      return;
+    }
+
+    setVerificationStateByThreadId((current) =>
+      updateThreadVerificationState(current, activeThreadId, (state) => {
+        if (state.requiredTurnId === activeLatestTurn.turnId) {
+          return state;
+        }
+        return {
+          ...state,
+          autoRunTriggeredForTurnId: null,
+          requiredTurnId: activeLatestTurn.turnId,
+        };
+      }),
+    );
+  }, [
+    activeLatestTurn?.turnId,
+    activeThreadId,
+    latestChangedFiles.length,
+    latestTurnSettled,
+    verificationScripts.length,
+  ]);
+  const runVerificationScript = useCallback(
+    async (
+      script: VerificationScriptDefinition,
+      options?: {
+        markAutoTriggered?: boolean;
+        turnId?: TurnId | null;
+      },
+    ) => {
+      if (!activeThreadId || !activeProject) {
+        return;
+      }
+
+      const projectScript = activeProject.scripts.find((candidate) => candidate.id === script.id);
+      if (!projectScript) {
+        return;
+      }
+
+      const trackedTurnId =
+        options?.turnId ??
+        (activeVerificationState.requiredTurnId as TurnId | null) ??
+        activeLatestTurn?.turnId ??
+        null;
+      const runId = randomUUID();
+      const launchedAt = new Date().toISOString();
+
+      const launch = await runProjectScript(projectScript, {
+        commandOverride: buildVerificationCommand(projectScript.command, runId),
+        preferNewTerminal: true,
+        rememberAsLastInvoked: false,
+      });
+
+      if (!launch) {
+        setVerificationStateByThreadId((current) =>
+          updateThreadVerificationState(current, activeThreadId, (state) => ({
+            ...state,
+            autoRunTriggeredForTurnId:
+              options?.markAutoTriggered && trackedTurnId
+                ? trackedTurnId
+                : state.autoRunTriggeredForTurnId,
+            requiredTurnId: trackedTurnId ?? state.requiredTurnId,
+            runs: [
+              ...state.runs.filter(
+                (run) => !(run.scriptId === script.id && run.turnId === trackedTurnId),
+              ),
+              {
+                completedAt: launchedAt,
+                error: "Failed to launch verification script.",
+                exitCode: null,
+                exitSignal: null,
+                role: script.role,
+                runId,
+                scriptCommand: projectScript.command,
+                scriptId: script.id,
+                scriptName: script.name,
+                startedAt: launchedAt,
+                status: "failed",
+                terminalId: "unknown",
+                threadId: activeThreadId,
+                turnId: trackedTurnId,
+              },
+            ],
+          })),
+        );
+        return;
+      }
+
+      verificationRunLookupRef.current[`${activeThreadId}:${launch.terminalId}`] = {
+        runId,
+        threadId: activeThreadId,
+      };
+      verificationOutputBufferRef.current[`${activeThreadId}:${launch.terminalId}`] = "";
+      setVerificationStateByThreadId((current) =>
+        updateThreadVerificationState(current, activeThreadId, (state) => ({
+          ...state,
+          autoRunTriggeredForTurnId:
+            options?.markAutoTriggered && trackedTurnId
+              ? trackedTurnId
+              : state.autoRunTriggeredForTurnId,
+          requiredTurnId: trackedTurnId ?? state.requiredTurnId,
+          runs: [
+            ...state.runs.filter(
+              (run) => !(run.scriptId === script.id && run.turnId === trackedTurnId),
+            ),
+            {
+              completedAt: null,
+              error: null,
+              exitCode: null,
+              exitSignal: null,
+              role: script.role,
+              runId,
+              scriptCommand: projectScript.command,
+              scriptId: script.id,
+              scriptName: script.name,
+              startedAt: launchedAt,
+              status: "running",
+              terminalId: launch.terminalId,
+              threadId: activeThreadId,
+              turnId: trackedTurnId,
+            },
+          ],
+        })),
+      );
+    },
+    [
+      activeLatestTurn?.turnId,
+      activeProject,
+      activeThreadId,
+      activeVerificationState.requiredTurnId,
+      runProjectScript,
+    ],
+  );
+  const runAllVerificationScripts = useCallback(() => {
+    const requiredTurnId =
+      (activeVerificationState.requiredTurnId as TurnId | null) ?? activeLatestTurn?.turnId ?? null;
+    if (!activeThreadId || verificationScripts.length === 0) {
+      return;
+    }
+
+    setVerificationStateByThreadId((current) =>
+      updateThreadVerificationState(current, activeThreadId, (state) => ({
+        ...state,
+        autoRunTriggeredForTurnId: requiredTurnId ?? state.autoRunTriggeredForTurnId,
+        requiredTurnId: requiredTurnId ?? state.requiredTurnId,
+      })),
+    );
+
+    for (const script of verificationScripts) {
+      void runVerificationScript(script, { turnId: requiredTurnId });
+    }
+  }, [
+    activeLatestTurn?.turnId,
+    activeThreadId,
+    activeVerificationState.requiredTurnId,
+    runVerificationScript,
+    verificationScripts,
+  ]);
+  useEffect(() => {
+    if (!autoVerifyEnabled || !activeThreadId) {
+      return;
+    }
+    const requiredTurnId = activeVerificationState.requiredTurnId;
+    if (!requiredTurnId || verificationScripts.length === 0) {
+      return;
+    }
+    if (activeVerificationState.autoRunTriggeredForTurnId === requiredTurnId) {
+      return;
+    }
+
+    setVerificationStateByThreadId((current) =>
+      updateThreadVerificationState(current, activeThreadId, (state) => ({
+        ...state,
+        autoRunTriggeredForTurnId: requiredTurnId,
+      })),
+    );
+
+    for (const script of verificationScripts) {
+      void runVerificationScript(script, {
+        markAutoTriggered: true,
+        turnId: requiredTurnId as TurnId,
+      });
+    }
+  }, [
+    activeThreadId,
+    activeVerificationState.autoRunTriggeredForTurnId,
+    activeVerificationState.requiredTurnId,
+    autoVerifyEnabled,
+    runVerificationScript,
+    verificationScripts,
+  ]);
+  useEffect(() => {
+    const api = readNativeApi();
+    if (!api) {
+      return;
+    }
+
+    return api.terminal.onEvent((event) => {
+      const lookupKey = `${event.threadId}:${event.terminalId}`;
+      const trackedRun = verificationRunLookupRef.current[lookupKey];
+      if (!trackedRun) {
+        return;
+      }
+
+      if (event.type === "output") {
+        const nextBuffer =
+          `${verificationOutputBufferRef.current[lookupKey] ?? ""}${event.data}`.slice(-2_048);
+        verificationOutputBufferRef.current[lookupKey] = nextBuffer;
+        const match = nextBuffer.match(/__T3_VERIFY__:([A-Za-z0-9-]+):(-?\d+)/);
+        if (!match || match[1] !== trackedRun.runId) {
+          return;
+        }
+        const exitCode = Number(match[2]);
+        delete verificationRunLookupRef.current[lookupKey];
+        delete verificationOutputBufferRef.current[lookupKey];
+        setVerificationStateByThreadId((current) =>
+          updateThreadVerificationState(current, trackedRun.threadId, (state) => ({
+            ...state,
+            runs: state.runs.map((run) =>
+              run.runId !== trackedRun.runId
+                ? run
+                : {
+                    ...run,
+                    completedAt: event.createdAt,
+                    error: exitCode === 0 ? null : `Exited with code ${exitCode}.`,
+                    exitCode,
+                    status: exitCode === 0 ? "passed" : "failed",
+                  },
+            ),
+          })),
+        );
+        return;
+      }
+
+      if (event.type === "error") {
+        delete verificationRunLookupRef.current[lookupKey];
+        delete verificationOutputBufferRef.current[lookupKey];
+        setVerificationStateByThreadId((current) =>
+          updateThreadVerificationState(current, trackedRun.threadId, (state) => ({
+            ...state,
+            runs: state.runs.map((run) =>
+              run.runId !== trackedRun.runId
+                ? run
+                : {
+                    ...run,
+                    completedAt: event.createdAt,
+                    error: event.message,
+                    status: "failed",
+                  },
+            ),
+          })),
+        );
+      }
+    });
+  }, []);
   const persistProjectScripts = useCallback(
     async (input: {
       projectId: ProjectId;
@@ -2257,7 +2743,10 @@ export default function ChatView({ threadId }: ChatViewProps) {
       runtimeMode: RuntimeMode;
       interactionMode: ProviderInteractionMode;
     }) => {
-      if (!serverThread) {
+      const targetServerThread = useStore
+        .getState()
+        .threads.find((thread) => thread.id === input.threadId);
+      if (!targetServerThread) {
         return;
       }
       const api = readNativeApi();
@@ -2267,10 +2756,10 @@ export default function ChatView({ threadId }: ChatViewProps) {
 
       if (
         input.modelSelection !== undefined &&
-        (input.modelSelection.model !== serverThread.modelSelection.model ||
-          input.modelSelection.provider !== serverThread.modelSelection.provider ||
+        (input.modelSelection.model !== targetServerThread.modelSelection.model ||
+          input.modelSelection.provider !== targetServerThread.modelSelection.provider ||
           JSON.stringify(input.modelSelection.options ?? null) !==
-            JSON.stringify(serverThread.modelSelection.options ?? null))
+            JSON.stringify(targetServerThread.modelSelection.options ?? null))
       ) {
         await api.orchestration.dispatchCommand({
           type: "thread.meta.update",
@@ -2280,7 +2769,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
         });
       }
 
-      if (input.runtimeMode !== serverThread.runtimeMode) {
+      if (input.runtimeMode !== targetServerThread.runtimeMode) {
         await api.orchestration.dispatchCommand({
           type: "thread.runtime-mode.set",
           commandId: newCommandId(),
@@ -2290,7 +2779,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
         });
       }
 
-      if (input.interactionMode !== serverThread.interactionMode) {
+      if (input.interactionMode !== targetServerThread.interactionMode) {
         await api.orchestration.dispatchCommand({
           type: "thread.interaction-mode.set",
           commandId: newCommandId(),
@@ -2300,7 +2789,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
         });
       }
     },
-    [serverThread],
+    [],
   );
 
   // Auto-scroll on new messages
@@ -3066,18 +3555,26 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const dispatchQueuedComposerSubmission = useCallback(
     async (submission: QueuedComposerSubmission): Promise<"sent" | "failed" | "deferred"> => {
       const api = readNativeApi();
-      if (!api || !activeThread || activeThread.id !== submission.threadId) {
+      const targetThread = useStore
+        .getState()
+        .threads.find((thread) => thread.id === submission.threadId);
+      if (!api || !targetThread || !threadHasStarted(targetThread)) {
         return "deferred";
       }
+      const targetPhase = derivePhase(targetThread.session ?? null);
+      const targetPendingApproval = derivePendingApprovals(targetThread.activities)[0] ?? null;
+      const targetPendingUserInput = derivePendingUserInputs(targetThread.activities)[0] ?? null;
       if (
-        !threadHasStarted(activeThread) ||
-        phase === "running" ||
+        targetPhase === "running" ||
+        targetPendingApproval !== null ||
+        targetPendingUserInput !== null ||
         isConnecting ||
         isSendBusy ||
         sendInFlightRef.current
       ) {
         return "deferred";
       }
+      const isActiveSubmissionThread = activeThread?.id === submission.threadId;
 
       const messageIdForSend = newMessageId();
       const messageCreatedAt = new Date().toISOString();
@@ -3091,21 +3588,25 @@ export default function ChatView({ threadId }: ChatViewProps) {
       }));
 
       sendInFlightRef.current = true;
-      beginLocalDispatch({ preparingWorktree: false });
+      if (isActiveSubmissionThread) {
+        beginLocalDispatch({ preparingWorktree: false });
+      }
       setThreadError(submission.threadId, null);
-      setOptimisticUserMessages((existing) => [
-        ...existing,
-        {
-          id: messageIdForSend,
-          role: "user",
-          text: submission.outgoingMessageText,
-          ...(optimisticAttachments.length > 0 ? { attachments: optimisticAttachments } : {}),
-          createdAt: messageCreatedAt,
-          streaming: false,
-        },
-      ]);
-      shouldAutoScrollRef.current = true;
-      forceStickToBottom();
+      if (isActiveSubmissionThread) {
+        setOptimisticUserMessages((existing) => [
+          ...existing,
+          {
+            id: messageIdForSend,
+            role: "user",
+            text: submission.outgoingMessageText,
+            ...(optimisticAttachments.length > 0 ? { attachments: optimisticAttachments } : {}),
+            createdAt: messageCreatedAt,
+            streaming: false,
+          },
+        ]);
+        shouldAutoScrollRef.current = true;
+        forceStickToBottom();
+      }
 
       try {
         await persistThreadSettingsForNextTurn({
@@ -3143,18 +3644,53 @@ export default function ChatView({ threadId }: ChatViewProps) {
           createdAt: messageCreatedAt,
         });
 
+        if (!isActiveSubmissionThread) {
+          for (const image of submission.images) {
+            revokeBlobPreviewUrl(image.previewUrl);
+          }
+        }
+
         return "sent";
       } catch (err) {
-        setOptimisticUserMessages((existing) => {
-          const removed = existing.filter((message) => message.id === messageIdForSend);
-          for (const message of removed) {
-            revokeUserMessagePreviewUrls(message);
-          }
-          const next = existing.filter((message) => message.id !== messageIdForSend);
-          return next.length === existing.length ? existing : next;
-        });
+        if (isActiveSubmissionThread) {
+          setOptimisticUserMessages((existing) => {
+            const removed = existing.filter((message) => message.id === messageIdForSend);
+            for (const message of removed) {
+              revokeUserMessagePreviewUrls(message);
+            }
+            const next = existing.filter((message) => message.id !== messageIdForSend);
+            return next.length === existing.length ? existing : next;
+          });
+        }
+
+        const queuedThreadDraft =
+          useComposerDraftStore.getState().draftsByThreadId[submission.threadId];
+        const canRestoreQueuedSubmissionDraft =
+          (queuedThreadDraft?.prompt.length ?? 0) === 0 &&
+          (queuedThreadDraft?.images.length ?? 0) === 0 &&
+          (queuedThreadDraft?.terminalContexts.length ?? 0) === 0;
+
+        if (canRestoreQueuedSubmissionDraft) {
+          useComposerDraftStore.getState().setPrompt(submission.threadId, submission.prompt);
+          useComposerDraftStore
+            .getState()
+            .setModelSelection(submission.threadId, submission.modelSelection);
+          useComposerDraftStore
+            .getState()
+            .setRuntimeMode(submission.threadId, submission.runtimeMode);
+          useComposerDraftStore
+            .getState()
+            .setInteractionMode(submission.threadId, submission.interactionMode);
+          useComposerDraftStore
+            .getState()
+            .addImages(submission.threadId, submission.images.map(cloneComposerImageForRetry));
+          useComposerDraftStore
+            .getState()
+            .addTerminalContexts(submission.threadId, submission.terminalContexts);
+        }
 
         if (
+          isActiveSubmissionThread &&
           promptRef.current.length === 0 &&
           composerImagesRef.current.length === 0 &&
           composerTerminalContextsRef.current.length === 0
@@ -3164,8 +3700,6 @@ export default function ChatView({ threadId }: ChatViewProps) {
           setComposerCursor(
             collapseExpandedComposerCursor(submission.prompt, submission.prompt.length),
           );
-          addComposerImagesToDraft(submission.images.map(cloneComposerImageForRetry));
-          addComposerTerminalContextsToDraft(submission.terminalContexts);
           setComposerTrigger(detectComposerTrigger(submission.prompt, submission.prompt.length));
         }
 
@@ -3173,7 +3707,9 @@ export default function ChatView({ threadId }: ChatViewProps) {
           submission.threadId,
           err instanceof Error ? err.message : "Failed to send queued message.",
         );
-        resetLocalDispatch();
+        if (isActiveSubmissionThread) {
+          resetLocalDispatch();
+        }
         return "failed";
       } finally {
         sendInFlightRef.current = false;
@@ -3181,14 +3717,11 @@ export default function ChatView({ threadId }: ChatViewProps) {
     },
     [
       activeThread,
-      addComposerImagesToDraft,
-      addComposerTerminalContextsToDraft,
       beginLocalDispatch,
       forceStickToBottom,
       isConnecting,
       isSendBusy,
       persistThreadSettingsForNextTurn,
-      phase,
       resetLocalDispatch,
       setPrompt,
       setThreadError,
@@ -3998,22 +4531,13 @@ export default function ChatView({ threadId }: ChatViewProps) {
   ]);
 
   useEffect(() => {
-    if (!activeThread?.id) {
-      return;
-    }
-    if (
-      phase === "running" ||
-      isConnecting ||
-      isSendBusy ||
-      activePendingApproval !== null ||
-      activePendingUserInput !== null ||
-      sendInFlightRef.current ||
-      processingQueuedComposerSubmissionIdRef.current !== null
-    ) {
-      return;
-    }
-
-    const nextQueuedSubmission = queuedComposerSubmissions[0];
+    const nextQueuedSubmission = findNextQueuedComposerSubmissionToDispatch({
+      queuedComposerSubmissions: allQueuedComposerSubmissions,
+      threads,
+      isConnecting,
+      isSending: isSendBusy || sendInFlightRef.current,
+      processingSubmissionId: processingQueuedComposerSubmissionIdRef.current,
+    });
     if (!nextQueuedSubmission) {
       return;
     }
@@ -4037,15 +4561,12 @@ export default function ChatView({ threadId }: ChatViewProps) {
         }
       });
   }, [
-    activePendingApproval,
-    activePendingUserInput,
-    activeThread?.id,
+    allQueuedComposerSubmissions,
     dispatchQueuedComposerSubmission,
     isConnecting,
     isSendBusy,
-    phase,
-    queuedComposerSubmissions,
     removeQueuedComposerSubmission,
+    threads,
   ]);
 
   const onProviderModelSelect = useCallback(
@@ -4476,6 +4997,9 @@ export default function ChatView({ threadId }: ChatViewProps) {
           gitCwd={gitCwd}
           diffOpen={diffOpen}
           workspaceCodexSummary={workspaceCodexSummary}
+          onOpenWorkbench={() => {
+            setAgentWorkbenchOpen(true);
+          }}
           onOpenDoctor={() => {
             setDoctorDialogOpen(true);
           }}
@@ -5102,6 +5626,49 @@ export default function ChatView({ threadId }: ChatViewProps) {
               onPrepared={handlePreparedPullRequestThread}
             />
           ) : null}
+          <AgentWorkbenchDialog
+            activeBranch={gitStatus?.branch ?? activeThread.branch ?? null}
+            activeWorktreePath={activeThread.worktreePath ?? null}
+            open={agentWorkbenchOpen}
+            onOpenChange={setAgentWorkbenchOpen}
+            activeProjectName={activeProject?.name}
+            activeThreadTitle={activeThread.title}
+            gitStatus={gitStatus}
+            interactionMode={interactionMode}
+            latestChangedFiles={latestChangedFiles}
+            latestChangedTurnId={activeLatestTurn?.turnId ?? null}
+            onOpenHandoff={() => {
+              setHandoffDialogOpen(true);
+            }}
+            onTakeOverSession={() => {
+              void takeOverSession();
+            }}
+            onOpenTurnDiff={onOpenTurnDiff}
+            onRunAllVerificationScripts={runAllVerificationScripts}
+            onRunVerificationScript={(script) => {
+              void runVerificationScript(script);
+            }}
+            onVerificationAutoRunChange={setAutoVerifyEnabledForProject}
+            preflight={resolvedWorkProfilePreflight}
+            projectSpecialization={projectSpecialization}
+            reviewReadiness={reviewReadiness}
+            runtimeMode={runtimeMode}
+            sessionStatus={activeThread.session?.orchestrationStatus ?? null}
+            sessionTakeoverPending={sessionTakeoverPending}
+            selectedProvider={selectedProvider}
+            selectedWorkspaceCodexProfileName={composerDraft.workspaceCodexProfileName}
+            suggestedWorkspaceCodexProfileName={suggestedWorkspaceCodexProfile?.name ?? null}
+            verificationAutoRunEnabled={autoVerifyEnabled}
+            verificationRequiredTurnId={
+              (activeVerificationState.requiredTurnId as TurnId | null) ?? null
+            }
+            verificationRuns={activeVerificationState.runs}
+            verificationScripts={verificationScripts}
+            workProfile={activeWorkProfile}
+            workspaceCodexSummary={workspaceCodexSummary}
+            workspaceDefaultsSuppressed={workspaceDefaultsSuppressed}
+            workspaceRoot={activeProject?.cwd ?? null}
+          />
           <DoctorDialog
             open={doctorDialogOpen}
             onOpenChange={setDoctorDialogOpen}
@@ -5124,18 +5691,29 @@ export default function ChatView({ threadId }: ChatViewProps) {
             providers={providerStatuses}
           />
           <HandoffDialog
+            activeBranch={gitStatus?.branch ?? activeThread.branch ?? null}
             open={handoffDialogOpen}
             onOpenChange={setHandoffDialogOpen}
             activeThreadTitle={activeThread.title}
             activeProjectName={activeProject?.name}
             activeProjectPath={activeProject?.cwd ?? null}
+            activeWorktreePath={activeThread.worktreePath ?? null}
+            gitStatus={gitStatus}
             projectSpecialization={projectSpecialization}
+            latestChangedFiles={latestChangedFiles}
             workProfileLabel={activeWorkProfile.label}
             selectedProvider={selectedProvider}
             runtimeMode={runtimeMode}
             interactionMode={interactionMode}
             selectedWorkspaceCodexProfileName={composerDraft.workspaceCodexProfileName}
             suggestedWorkspaceCodexProfileName={suggestedWorkspaceCodexProfile?.name ?? null}
+            reviewReadiness={reviewReadiness}
+            verificationRequiredTurnId={
+              (activeVerificationState.requiredTurnId as TurnId | null) ?? null
+            }
+            verificationRuns={activeVerificationState.runs}
+            verificationScripts={verificationScripts}
+            verificationSummary={verificationSummary}
             workspaceDefaultsSuppressed={workspaceDefaultsSuppressed}
             preflight={resolvedWorkProfilePreflight}
             prompt={prompt}

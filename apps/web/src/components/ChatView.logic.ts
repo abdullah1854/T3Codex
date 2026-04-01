@@ -4,11 +4,13 @@ import { randomUUID } from "~/lib/utils";
 import { type ComposerImageAttachment, type DraftThreadState } from "../composerDraftStore";
 import { Schema } from "effect";
 import { useStore } from "../store";
+import { derivePendingApprovals, derivePendingUserInputs, derivePhase } from "../session-logic";
 import {
   filterTerminalContextsWithText,
   stripInlineTerminalContextPlaceholders,
   type TerminalContextDraft,
 } from "../lib/terminalContext";
+import type { QueuedComposerSubmission } from "./chat/queuedComposerSubmissions";
 
 export const LAST_INVOKED_SCRIPT_BY_PROJECT_KEY = "t3code:last-invoked-script-by-project";
 const WORKTREE_BRANCH_PREFIX = "t3code";
@@ -158,6 +160,37 @@ export function buildExpiredTerminalContextToastCopy(
     title: `${noun} omitted from message`,
     description: "Re-add it if you want that terminal output included.",
   };
+}
+
+export function findNextQueuedComposerSubmissionToDispatch(input: {
+  queuedComposerSubmissions: ReadonlyArray<QueuedComposerSubmission>;
+  threads: ReadonlyArray<Thread>;
+  isConnecting: boolean;
+  isSending: boolean;
+  processingSubmissionId: string | null;
+}): QueuedComposerSubmission | null {
+  if (input.isConnecting || input.isSending || input.processingSubmissionId !== null) {
+    return null;
+  }
+
+  for (const submission of input.queuedComposerSubmissions) {
+    const thread = input.threads.find((candidate) => candidate.id === submission.threadId);
+    if (!thread || !threadHasStarted(thread)) {
+      continue;
+    }
+    if (derivePhase(thread.session ?? null) === "running") {
+      continue;
+    }
+    if (derivePendingApprovals(thread.activities).length > 0) {
+      continue;
+    }
+    if (derivePendingUserInputs(thread.activities).length > 0) {
+      continue;
+    }
+    return submission;
+  }
+
+  return null;
 }
 
 export function threadHasStarted(thread: Thread | null | undefined): boolean {

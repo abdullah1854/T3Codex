@@ -1696,6 +1696,39 @@ describe("WebSocket Server", () => {
     });
   });
 
+  it("supports projects.searchEntries with an empty query for workspace browsing", async () => {
+    const workspace = makeTempDir("t3code-ws-browse-entries-");
+    fs.mkdirSync(path.join(workspace, "src", "components"), { recursive: true });
+    fs.writeFileSync(
+      path.join(workspace, "src", "components", "Composer.tsx"),
+      "export {};\n",
+      "utf8",
+    );
+    fs.writeFileSync(path.join(workspace, "README.md"), "# test", "utf8");
+
+    server = await createTestServer({ cwd: "/test" });
+    const addr = server.address();
+    const port = typeof addr === "object" && addr !== null ? addr.port : 0;
+
+    const [ws] = await connectAndAwaitWelcome(port);
+    connections.push(ws);
+
+    const response = await sendRequest(ws, WS_METHODS.projectsSearchEntries, {
+      cwd: workspace,
+      query: "",
+      limit: 20,
+    });
+    expect(response.error).toBeUndefined();
+    expect(response.result).toEqual({
+      entries: expect.arrayContaining([
+        expect.objectContaining({ path: "src", kind: "directory" }),
+        expect.objectContaining({ path: "src/components/Composer.tsx", kind: "file" }),
+        expect.objectContaining({ path: "README.md", kind: "file" }),
+      ]),
+      truncated: false,
+    });
+  });
+
   it("supports projects.writeFile within the workspace root", async () => {
     const workspace = makeTempDir("t3code-ws-write-file-");
 

@@ -34,6 +34,7 @@ interface ChatHeaderProps {
   gitCwd: string | null;
   diffOpen: boolean;
   workspaceCodexSummary: WorkspaceCodexSummary | null;
+  onOpenWorkbench: () => void;
   onOpenDoctor: () => void;
   onOpenHandoff: () => void;
   onCreateCodexAgent: () => void;
@@ -67,6 +68,7 @@ export const ChatHeader = memo(function ChatHeader({
   gitCwd,
   diffOpen,
   workspaceCodexSummary,
+  onOpenWorkbench,
   onOpenDoctor,
   onOpenHandoff,
   onCreateCodexAgent,
@@ -133,6 +135,9 @@ export const ChatHeader = memo(function ChatHeader({
             onOpenWorkspace={onOpenWorkspace}
           />
         ) : null}
+        <Button variant="outline" size="xs" onClick={onOpenWorkbench}>
+          Workbench
+        </Button>
         <Button variant="outline" size="xs" onClick={onOpenDoctor}>
           Doctor
         </Button>

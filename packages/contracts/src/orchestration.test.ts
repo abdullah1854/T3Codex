@@ -249,6 +249,36 @@ it.effect("decodes thread archive and unarchive commands", () =>
   }),
 );
 
+it.effect("decodes thread session takeover commands and events", () =>
+  Effect.gen(function* () {
+    const command = yield* decodeOrchestrationCommand({
+      type: "thread.session.takeover",
+      commandId: "cmd-takeover-1",
+      threadId: "thread-1",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+    const event = yield* decodeOrchestrationEvent({
+      sequence: 3,
+      eventId: "event-takeover-1",
+      aggregateKind: "thread",
+      aggregateId: "thread-1",
+      type: "thread.session-takeover-requested",
+      occurredAt: "2026-01-01T00:00:00.000Z",
+      commandId: "cmd-takeover-1",
+      causationEventId: null,
+      correlationId: "cmd-takeover-1",
+      metadata: {},
+      payload: {
+        threadId: "thread-1",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      },
+    });
+
+    assert.strictEqual(command.type, "thread.session.takeover");
+    assert.strictEqual(event.type, "thread.session-takeover-requested");
+  }),
+);
+
 it.effect("decodes thread archived and unarchived events", () =>
   Effect.gen(function* () {
     const archived = yield* decodeOrchestrationEvent({

@@ -42,7 +42,7 @@ export function projectSearchEntriesQueryOptions(input: {
         limit,
       });
     },
-    enabled: (input.enabled ?? true) && input.cwd !== null && input.query.length > 0,
+    enabled: (input.enabled ?? true) && input.cwd !== null,
     staleTime: input.staleTime ?? DEFAULT_SEARCH_ENTRIES_STALE_TIME,
     placeholderData: (previous) => previous ?? EMPTY_SEARCH_ENTRIES_RESULT,
   });

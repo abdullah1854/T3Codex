@@ -1,11 +1,21 @@
 import {
+  type GitStatusResult,
   type ProviderInteractionMode,
   type ProviderKind,
   type RuntimeMode,
+  type TurnId,
 } from "@t3tools/contracts";
 import { useMemo } from "react";
 
+import {
+  buildAgentHandoffMarkdown,
+  type ReviewReadinessSummary,
+  type VerificationRunRecord,
+  type VerificationScriptDefinition,
+  type VerificationSummary,
+} from "~/agentWorkbench";
 import type { ProjectSpecialization } from "~/projectSpecializations";
+import type { TurnDiffFileChange } from "~/types";
 import type { WorkProfilePreflight } from "~/workProfiles";
 import type { WorkspaceCodexSummary } from "~/workspaceCodex";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
@@ -22,104 +32,55 @@ import {
 import { Textarea } from "../ui/textarea";
 
 interface HandoffDialogProps {
+  activeBranch: string | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   activeThreadTitle: string;
   activeProjectName: string | undefined;
   activeProjectPath: string | null;
+  activeWorktreePath: string | null;
+  gitStatus: GitStatusResult | null;
   projectSpecialization: ProjectSpecialization | null;
+  latestChangedFiles: readonly TurnDiffFileChange[];
   workProfileLabel: string;
   selectedProvider: ProviderKind;
   runtimeMode: RuntimeMode;
   interactionMode: ProviderInteractionMode;
   selectedWorkspaceCodexProfileName: string | null;
   suggestedWorkspaceCodexProfileName: string | null;
+  reviewReadiness: ReviewReadinessSummary;
+  verificationRequiredTurnId: TurnId | null;
+  verificationRuns: readonly VerificationRunRecord[];
+  verificationScripts: readonly VerificationScriptDefinition[];
+  verificationSummary: VerificationSummary;
   workspaceDefaultsSuppressed: boolean;
   preflight: WorkProfilePreflight;
   prompt: string;
   workspaceCodexSummary: WorkspaceCodexSummary | null;
-}
-
-function buildOptionalList(values: readonly string[]) {
-  return values.length > 0 ? values.join(", ") : "None";
-}
-
-function buildHandoffMarkdown(input: {
-  activeThreadTitle: string;
-  activeProjectName: string | undefined;
-  activeProjectPath: string | null;
-  projectSpecialization: ProjectSpecialization | null;
-  workProfileLabel: string;
-  selectedProvider: ProviderKind;
-  runtimeMode: RuntimeMode;
-  interactionMode: ProviderInteractionMode;
-  selectedWorkspaceCodexProfileName: string | null;
-  suggestedWorkspaceCodexProfileName: string | null;
-  workspaceDefaultsSuppressed: boolean;
-  preflight: WorkProfilePreflight;
-  prompt: string;
-  workspaceCodexSummary: WorkspaceCodexSummary | null;
-}) {
-  const lines: string[] = [
-    "# Resume / Handoff",
-    "",
-    "## Current thread",
-    `- Thread: ${input.activeThreadTitle}`,
-    `- Project: ${input.activeProjectName ?? "No project"}`,
-    `- Path: ${input.activeProjectPath ?? "No workspace path"}`,
-    `- Project specialization: ${input.projectSpecialization?.label ?? "None"}`,
-    `- Workflow profile: ${input.workProfileLabel}`,
-    `- Provider: ${input.selectedProvider}`,
-    `- Runtime mode: ${input.runtimeMode}`,
-    `- Interaction mode: ${input.interactionMode}`,
-    `- Repo defaults: ${input.workspaceDefaultsSuppressed ? "Muted for this draft" : "Active"}`,
-    `- Selected repo Codex profile: ${input.selectedWorkspaceCodexProfileName ?? "Workspace defaults"}`,
-    `- Best matching repo Codex profile: ${input.suggestedWorkspaceCodexProfileName ?? "No named match"}`,
-    "",
-    "## Preflight",
-    `- System: ${input.preflight.system?.trim() || "Not set"}`,
-    `- Environment: ${input.preflight.environment?.trim() || "Not set"}`,
-    `- Output format: ${input.preflight.outputFormat?.trim() || "Not set"}`,
-    `- Target: ${input.preflight.target?.trim() || "Not set"}`,
-    `- Evidence: ${input.preflight.evidence?.trim() || "Not set"}`,
-    "",
-    "## Repo-local Codex",
-    `- AGENTS.md: ${input.workspaceCodexSummary?.hasAgentsMd ? "Present" : "Missing"}`,
-    `- .codex/config.toml: ${input.workspaceCodexSummary?.hasConfigToml ? "Present" : "Missing"}`,
-    `- Named profiles: ${input.workspaceCodexSummary?.profiles.map((profile) => profile.name).join(", ") || "None"}`,
-    `- Skills: ${buildOptionalList(input.workspaceCodexSummary?.skills ?? [])}`,
-    `- Agents: ${buildOptionalList(input.workspaceCodexSummary?.agents ?? [])}`,
-  ];
-
-  if (input.projectSpecialization) {
-    lines.push(
-      "",
-      "## Project specialization notes",
-      `- ${input.projectSpecialization.description}`,
-      ...input.projectSpecialization.handoffNotes.map((note) => `- ${note}`),
-    );
-  }
-
-  if (input.prompt.trim().length > 0) {
-    lines.push("", "## Current draft prompt", input.prompt.trim());
-  }
-
-  return lines.join("\n");
 }
 
 export function HandoffDialog({
+  activeBranch,
   open,
   onOpenChange,
   activeThreadTitle,
   activeProjectName,
   activeProjectPath,
+  activeWorktreePath,
+  gitStatus,
   projectSpecialization,
+  latestChangedFiles,
   workProfileLabel,
   selectedProvider,
   runtimeMode,
   interactionMode,
   selectedWorkspaceCodexProfileName,
   suggestedWorkspaceCodexProfileName,
+  reviewReadiness,
+  verificationRequiredTurnId,
+  verificationRuns,
+  verificationScripts,
+  verificationSummary,
   workspaceDefaultsSuppressed,
   preflight,
   prompt,
@@ -127,10 +88,14 @@ export function HandoffDialog({
 }: HandoffDialogProps) {
   const handoffMarkdown = useMemo(
     () =>
-      buildHandoffMarkdown({
+      buildAgentHandoffMarkdown({
+        activeBranch,
+        activeWorktreePath,
         activeThreadTitle,
         activeProjectName,
         activeProjectPath,
+        gitStatus,
+        latestChangedFiles,
         projectSpecialization,
         workProfileLabel,
         selectedProvider,
@@ -138,23 +103,37 @@ export function HandoffDialog({
         interactionMode,
         selectedWorkspaceCodexProfileName,
         suggestedWorkspaceCodexProfileName,
+        reviewReadiness,
+        verificationRequiredTurnId,
+        verificationRuns,
+        verificationScripts,
+        verificationSummary,
         workspaceDefaultsSuppressed,
         preflight,
         prompt,
         workspaceCodexSummary,
       }),
     [
+      activeBranch,
       activeProjectName,
       activeProjectPath,
       activeThreadTitle,
+      activeWorktreePath,
+      gitStatus,
       interactionMode,
+      latestChangedFiles,
       preflight,
       projectSpecialization,
       prompt,
+      reviewReadiness,
       runtimeMode,
       selectedProvider,
       selectedWorkspaceCodexProfileName,
       suggestedWorkspaceCodexProfileName,
+      verificationRequiredTurnId,
+      verificationRuns,
+      verificationScripts,
+      verificationSummary,
       workProfileLabel,
       workspaceCodexSummary,
       workspaceDefaultsSuppressed,
@@ -168,14 +147,18 @@ export function HandoffDialog({
         <DialogHeader>
           <DialogTitle>Resume / Handoff</DialogTitle>
           <DialogDescription>
-            Copy a ready-to-paste handoff note with the current workflow profile, repo-local Codex
-            context, and draft state.
+            Copy a ready-to-paste handoff note with the current review package, verification state,
+            repo-local Codex context, and draft state.
           </DialogDescription>
         </DialogHeader>
         <DialogPanel className="space-y-3">
           <div className="rounded-xl border border-border/70 bg-muted/18 p-3 text-sm text-muted-foreground">
-            This is tied to the current repo-local Codex setup, so the selected named profile and
-            workspace-default state are included in the note.
+            This note now includes the latest changed files, verification results, and branch or PR
+            state so the next operator does not have to reconstruct what is safe to trust.
+          </div>
+          <div className="rounded-xl border border-border/70 bg-background/80 p-3 text-sm">
+            <p className="font-medium text-foreground">{reviewReadiness.headline}</p>
+            <p className="mt-1 text-muted-foreground">{reviewReadiness.nextStep}</p>
           </div>
           <Textarea
             readOnly

@@ -35,7 +35,8 @@ type ProviderIntentEvent = Extract<
       | "thread.turn-interrupt-requested"
       | "thread.approval-response-requested"
       | "thread.user-input-response-requested"
-      | "thread.session-stop-requested";
+      | "thread.session-stop-requested"
+      | "thread.session-takeover-requested";
   }
 >;
 
@@ -173,7 +174,8 @@ const make = Effect.gen(function* () {
       | "provider.turn.interrupt.failed"
       | "provider.approval.respond.failed"
       | "provider.user-input.respond.failed"
-      | "provider.session.stop.failed";
+      | "provider.session.stop.failed"
+      | "provider.session.takeover.failed";
     readonly summary: string;
     readonly detail: string;
     readonly turnId: TurnId | null;
@@ -216,6 +218,11 @@ const make = Effect.gen(function* () {
     const readModel = yield* orchestrationEngine.getReadModel();
     return readModel.threads.find((entry) => entry.id === threadId);
   });
+
+  const resolveActiveSessionForThread = (threadId: ThreadId) =>
+    providerService
+      .listSessions()
+      .pipe(Effect.map((sessions) => sessions.find((session) => session.threadId === threadId)));
 
   const ensureSessionForThread = Effect.fnUntraced(function* (
     threadId: ThreadId,
@@ -724,6 +731,98 @@ const make = Effect.gen(function* () {
     });
   });
 
+  const processSessionTakeoverRequested = Effect.fnUntraced(function* (
+    event: Extract<ProviderIntentEvent, { type: "thread.session-takeover-requested" }>,
+  ) {
+    const thread = yield* resolveThread(event.payload.threadId);
+    if (!thread) {
+      return;
+    }
+
+    const readModel = yield* orchestrationEngine.getReadModel();
+    const effectiveCwd = resolveThreadWorkspaceCwd({
+      thread,
+      projects: readModel.projects,
+    });
+    const provider =
+      Schema.is(ProviderKind)(thread.session?.providerName) && thread.session?.providerName !== null
+        ? thread.session.providerName
+        : thread.modelSelection.provider;
+    const activeSession = yield* resolveActiveSessionForThread(thread.id);
+    const resumeCursor = activeSession?.resumeCursor;
+    const startedAt = event.payload.createdAt;
+
+    yield* setThreadSession({
+      threadId: thread.id,
+      session: {
+        threadId: thread.id,
+        status: "starting",
+        providerName: provider,
+        runtimeMode: thread.runtimeMode,
+        activeTurnId: null,
+        lastError: null,
+        updatedAt: startedAt,
+      },
+      createdAt: startedAt,
+    });
+
+    const restartedSession = yield* Effect.gen(function* () {
+      if (activeSession) {
+        yield* providerService.stopSession({ threadId: thread.id });
+      }
+
+      return yield* providerService.startSession(thread.id, {
+        threadId: thread.id,
+        provider,
+        ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
+        modelSelection: thread.modelSelection,
+        ...(resumeCursor !== undefined ? { resumeCursor } : {}),
+        runtimeMode: thread.runtimeMode,
+      });
+    }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.gen(function* () {
+          yield* setThreadSession({
+            threadId: thread.id,
+            session: {
+              threadId: thread.id,
+              status: "error",
+              providerName: provider,
+              runtimeMode: thread.runtimeMode,
+              activeTurnId: null,
+              lastError: Cause.pretty(cause),
+              updatedAt: startedAt,
+            },
+            createdAt: startedAt,
+          });
+          yield* appendProviderFailureActivity({
+            threadId: thread.id,
+            kind: "provider.session.takeover.failed",
+            summary: "Provider session takeover failed",
+            detail: Cause.pretty(cause),
+            turnId: null,
+            createdAt: startedAt,
+          });
+          return yield* Effect.failCause(cause);
+        }),
+      ),
+    );
+
+    yield* setThreadSession({
+      threadId: thread.id,
+      session: {
+        threadId: thread.id,
+        status: mapProviderSessionStatusToOrchestrationStatus(restartedSession.status),
+        providerName: restartedSession.provider,
+        runtimeMode: thread.runtimeMode,
+        activeTurnId: null,
+        lastError: restartedSession.lastError ?? null,
+        updatedAt: restartedSession.updatedAt,
+      },
+      createdAt: restartedSession.updatedAt,
+    });
+  });
+
   const processDomainEvent = (event: ProviderIntentEvent) =>
     Effect.gen(function* () {
       switch (event.type) {
@@ -755,6 +854,9 @@ const make = Effect.gen(function* () {
         case "thread.session-stop-requested":
           yield* processSessionStopRequested(event);
           return;
+        case "thread.session-takeover-requested":
+          yield* processSessionTakeoverRequested(event);
+          return;
       }
     });
 
@@ -781,7 +883,8 @@ const make = Effect.gen(function* () {
         event.type === "thread.turn-interrupt-requested" ||
         event.type === "thread.approval-response-requested" ||
         event.type === "thread.user-input-response-requested" ||
-        event.type === "thread.session-stop-requested"
+        event.type === "thread.session-stop-requested" ||
+        event.type === "thread.session-takeover-requested"
       ) {
         return yield* worker.enqueue(event);
       }

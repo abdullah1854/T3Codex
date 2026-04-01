@@ -2108,6 +2108,135 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
+  it("keeps queued messages moving after switching to another thread", async () => {
+    const secondaryThreadId = "thread-browser-secondary" as ThreadId;
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-queued-background-send" as MessageId,
+        targetText: "queued background target",
+        sessionStatus: "running",
+      }),
+    });
+
+    try {
+      await page.getByTestId("composer-editor").fill("queued across thread switch");
+
+      const queueButton = await waitForButtonByText("Queue");
+      queueButton.click();
+
+      await vi.waitFor(
+        () => {
+          expect(document.body.textContent).toContain("1 queued");
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      useStore.setState((state) => {
+        const sourceThread = state.threads.find((thread) => thread.id === THREAD_ID);
+        if (!sourceThread) {
+          return state;
+        }
+        return {
+          ...state,
+          threads: [
+            ...state.threads,
+            {
+              ...sourceThread,
+              id: secondaryThreadId,
+              title: "Secondary thread",
+              latestTurn: {
+                turnId: "turn-secondary-ready" as TurnId,
+                state: "completed",
+                requestedAt: isoAt(2_010),
+                startedAt: isoAt(2_011),
+                completedAt: isoAt(2_012),
+                assistantMessageId: null,
+              },
+              session: sourceThread.session
+                ? {
+                    ...sourceThread.session,
+                    status: "ready",
+                    updatedAt: isoAt(2_012),
+                  }
+                : null,
+              activities: [],
+            },
+          ],
+        };
+      });
+
+      await mounted.router.navigate({
+        to: "/$threadId",
+        params: { threadId: secondaryThreadId },
+      });
+
+      await waitForURL(
+        mounted.router,
+        (path) => path === `/${secondaryThreadId}`,
+        "Route should switch to the secondary thread.",
+      );
+
+      useStore.setState((state) => ({
+        ...state,
+        threads: state.threads.map((thread) =>
+          thread.id === THREAD_ID
+            ? {
+                ...thread,
+                latestTurn: {
+                  turnId: "turn-queued-background-complete" as TurnId,
+                  state: "completed",
+                  requestedAt: isoAt(2_100),
+                  startedAt: isoAt(2_101),
+                  completedAt: isoAt(2_102),
+                  assistantMessageId: null,
+                },
+                session: thread.session
+                  ? {
+                      ...thread.session,
+                      status: "ready",
+                      updatedAt: isoAt(2_102),
+                    }
+                  : null,
+              }
+            : thread,
+        ),
+      }));
+
+      await vi.waitFor(
+        () => {
+          const turnStartRequests = wsRequests.filter(
+            (request) =>
+              request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+              (
+                request as {
+                  command?: { type?: string; threadId?: ThreadId; message?: { text?: string } };
+                }
+              ).command?.type === "thread.turn.start",
+          );
+          expect(turnStartRequests).toHaveLength(1);
+          expect(
+            (
+              turnStartRequests[0] as {
+                command?: { threadId?: ThreadId; message?: { text?: string } };
+              }
+            ).command?.threadId,
+          ).toBe(THREAD_ID);
+          expect(
+            (
+              turnStartRequests[0] as {
+                command?: { message?: { text?: string } };
+              }
+            ).command?.message?.text,
+          ).toContain("queued across thread switch");
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("lets the user remove queued messages before they send", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,

@@ -1577,4 +1577,106 @@ describe("ProviderCommandReactor", () => {
     expect(thread?.session?.threadId).toBe("thread-1");
     expect(thread?.session?.activeTurnId).toBeNull();
   });
+
+  it("reacts to thread.session.takeover by restarting an active session with its resume cursor", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-for-takeover"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("msg-takeover"),
+          role: "user",
+          text: "Resume this work",
+          attachments: [],
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.startSession.mock.calls.length === 1);
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.takeover",
+        commandId: CommandId.makeUnsafe("cmd-session-takeover"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(
+      () =>
+        harness.stopSession.mock.calls.length === 1 && harness.startSession.mock.calls.length === 2,
+    );
+
+    const secondStartInput = harness.startSession.mock.calls[1]?.[1] as
+      | {
+          resumeCursor?: unknown;
+          threadId?: string;
+        }
+      | undefined;
+    expect(secondStartInput?.threadId).toBe("thread-1");
+    expect(secondStartInput?.resumeCursor).toEqual({ opaque: "resume-1" });
+
+    const readModel = await Effect.runPromise(harness.engine.getReadModel());
+    const thread = readModel.threads.find((entry) => entry.id === ThreadId.makeUnsafe("thread-1"));
+    expect(thread?.session?.status).toBe("ready");
+    expect(thread?.session?.activeTurnId).toBeNull();
+    expect(thread?.session?.lastError).toBeNull();
+  });
+
+  it("reacts to thread.session.takeover by starting fresh when no runtime session is attached", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-session-set-for-takeover"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        session: {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          status: "ready",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.takeover",
+        commandId: CommandId.makeUnsafe("cmd-session-takeover-fresh"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.startSession.mock.calls.length === 1);
+
+    expect(harness.stopSession).not.toHaveBeenCalled();
+    const startInput = harness.startSession.mock.calls[0]?.[1] as
+      | {
+          resumeCursor?: unknown;
+          threadId?: string;
+        }
+      | undefined;
+    expect(startInput?.threadId).toBe("thread-1");
+    expect(startInput?.resumeCursor).toBeUndefined();
+
+    const readModel = await Effect.runPromise(harness.engine.getReadModel());
+    const thread = readModel.threads.find((entry) => entry.id === ThreadId.makeUnsafe("thread-1"));
+    expect(thread?.session?.status).toBe("ready");
+    expect(thread?.session?.activeTurnId).toBeNull();
+  });
 });

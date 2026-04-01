@@ -1,11 +1,13 @@
 import { ProjectId, ThreadId, TurnId } from "@t3tools/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useStore } from "../store";
+import type { Thread } from "../types";
 
 import {
   buildExpiredTerminalContextToastCopy,
   createLocalDispatchSnapshot,
   deriveComposerSendState,
+  findNextQueuedComposerSubmissionToDispatch,
   hasServerAcknowledgedLocalDispatch,
   waitForStartedServerThread,
 } from "./ChatView.logic";
@@ -77,6 +79,8 @@ describe("buildExpiredTerminalContextToastCopy", () => {
 
 const makeThread = (input?: {
   id?: ThreadId;
+  session?: Thread["session"];
+  activities?: Thread["activities"];
   latestTurn?: {
     turnId: TurnId;
     state: "running" | "completed";
@@ -84,7 +88,7 @@ const makeThread = (input?: {
     startedAt: string | null;
     completedAt: string | null;
   } | null;
-}) => ({
+}): Thread => ({
   id: input?.id ?? ThreadId.makeUnsafe("thread-1"),
   codexThreadId: null,
   projectId: ProjectId.makeUnsafe("project-1"),
@@ -92,7 +96,7 @@ const makeThread = (input?: {
   modelSelection: { provider: "codex" as const, model: "gpt-5.4" },
   runtimeMode: "full-access" as const,
   interactionMode: "default" as const,
-  session: null,
+  session: input?.session ?? null,
   messages: [],
   proposedPlans: [],
   error: null,
@@ -108,7 +112,7 @@ const makeThread = (input?: {
   branch: null,
   worktreePath: null,
   turnDiffSummaries: [],
-  activities: [],
+  activities: input?.activities ?? [],
 });
 
 afterEach(() => {
@@ -219,6 +223,113 @@ describe("waitForStartedServerThread", () => {
     await vi.advanceTimersByTimeAsync(500);
 
     await expect(promise).resolves.toBe(false);
+  });
+});
+
+describe("findNextQueuedComposerSubmissionToDispatch", () => {
+  const queuedSubmission = {
+    id: "queued-1",
+    createdAt: "2026-04-01T00:00:00.000Z",
+    threadId: ThreadId.makeUnsafe("thread-queued"),
+    interactionMode: "default" as const,
+    terminalContexts: [],
+    images: [],
+    modelSelection: { provider: "codex" as const, model: "gpt-5.4" },
+    outgoingMessageText: "queued follow-up",
+    preview: "queued follow-up",
+    prompt: "queued follow-up",
+    runtimeMode: "full-access" as const,
+    titleSeed: "queued follow-up",
+  };
+
+  it("returns the oldest dispatchable submission even when another thread is active", () => {
+    expect(
+      findNextQueuedComposerSubmissionToDispatch({
+        queuedComposerSubmissions: [queuedSubmission],
+        threads: [
+          makeThread({
+            id: queuedSubmission.threadId,
+            latestTurn: {
+              turnId: TurnId.makeUnsafe("turn-complete"),
+              state: "completed",
+              requestedAt: "2026-04-01T00:00:00.000Z",
+              startedAt: "2026-04-01T00:00:01.000Z",
+              completedAt: "2026-04-01T00:00:02.000Z",
+            },
+            session: {
+              provider: "codex",
+              status: "ready",
+              createdAt: "2026-04-01T00:00:00.000Z",
+              updatedAt: "2026-04-01T00:00:02.000Z",
+              orchestrationStatus: "idle",
+            },
+          }),
+          makeThread({
+            id: ThreadId.makeUnsafe("thread-active"),
+            latestTurn: {
+              turnId: TurnId.makeUnsafe("turn-active"),
+              state: "completed",
+              requestedAt: "2026-04-01T00:00:05.000Z",
+              startedAt: "2026-04-01T00:00:06.000Z",
+              completedAt: "2026-04-01T00:00:07.000Z",
+            },
+            session: {
+              provider: "codex",
+              status: "ready",
+              createdAt: "2026-04-01T00:00:05.000Z",
+              updatedAt: "2026-04-01T00:00:07.000Z",
+              orchestrationStatus: "idle",
+            },
+          }),
+        ],
+        isConnecting: false,
+        isSending: false,
+        processingSubmissionId: null,
+      }),
+    ).toEqual(queuedSubmission);
+  });
+
+  it("skips queued submissions whose thread is still blocked", () => {
+    const openApprovalActivity = {
+      id: "approval-open",
+      kind: "approval.requested",
+      summary: "Command approval requested",
+      tone: "approval",
+      createdAt: "2026-04-01T00:00:02.000Z",
+      payload: {
+        requestId: "req-1",
+        requestKind: "command",
+      },
+    } as Thread["activities"][number];
+
+    expect(
+      findNextQueuedComposerSubmissionToDispatch({
+        queuedComposerSubmissions: [queuedSubmission],
+        threads: [
+          makeThread({
+            id: queuedSubmission.threadId,
+            latestTurn: {
+              turnId: TurnId.makeUnsafe("turn-running"),
+              state: "completed",
+              requestedAt: "2026-04-01T00:00:00.000Z",
+              startedAt: "2026-04-01T00:00:01.000Z",
+              completedAt: "2026-04-01T00:00:02.000Z",
+            },
+            session: {
+              provider: "codex",
+              status: "ready",
+              createdAt: "2026-04-01T00:00:00.000Z",
+              updatedAt: "2026-04-01T00:00:02.000Z",
+              orchestrationStatus: "idle",
+            },
+            activities: [openApprovalActivity],
+          }),
+        ],
+        isConnecting: false,
+        isSending: false,
+        processingSubmissionId: null,
+      }),
+    ).toBeNull();
   });
 });
 
