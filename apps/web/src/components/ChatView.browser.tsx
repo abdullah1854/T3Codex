@@ -2024,6 +2024,123 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
+  it("queues composer messages while a turn is already running", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-queued-send" as MessageId,
+        targetText: "queued send target",
+        sessionStatus: "running",
+      }),
+    });
+
+    try {
+      await page.getByTestId("composer-editor").fill("queued follow-up");
+
+      const queueButton = await waitForButtonByText("Queue");
+      queueButton.click();
+
+      await vi.waitFor(
+        () => {
+          expect(document.body.textContent).toContain("1 queued");
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      const queuedTurnStartRequests = wsRequests.filter(
+        (request) =>
+          request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+          (request as { command?: { type?: string } }).command?.type === "thread.turn.start",
+      );
+      expect(queuedTurnStartRequests).toHaveLength(0);
+
+      useStore.setState((state) => ({
+        ...state,
+        threads: state.threads.map((thread) =>
+          thread.id === THREAD_ID
+            ? {
+                ...thread,
+                latestTurn: {
+                  turnId: "turn-queued-send-complete" as TurnId,
+                  state: "completed",
+                  requestedAt: isoAt(2_000),
+                  startedAt: isoAt(2_001),
+                  completedAt: isoAt(2_002),
+                  assistantMessageId: null,
+                },
+                session: thread.session
+                  ? {
+                      ...thread.session,
+                      status: "ready",
+                      updatedAt: isoAt(2_002),
+                    }
+                  : null,
+              }
+            : thread,
+        ),
+      }));
+
+      await vi.waitFor(
+        () => {
+          const turnStartRequests = wsRequests.filter(
+            (request) =>
+              request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+              (request as { command?: { type?: string; message?: { text?: string } } }).command
+                ?.type === "thread.turn.start",
+          );
+          expect(turnStartRequests).toHaveLength(1);
+          expect(
+            (
+              turnStartRequests[0] as {
+                command?: { message?: { text?: string } };
+              }
+            ).command?.message?.text,
+          ).toContain("queued follow-up");
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("sticks to the bottom when sending after scrolling up", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-scroll-on-send" as MessageId,
+        targetText: "scroll on send target",
+      }),
+    });
+
+    try {
+      const scrollContainer = await waitForElement(
+        () => document.querySelector<HTMLDivElement>("div.overflow-y-auto.overscroll-y-contain"),
+        "Unable to find ChatView message scroll container.",
+      );
+
+      scrollContainer.scrollTop = 0;
+      scrollContainer.dispatchEvent(new Event("scroll"));
+      await waitForLayout();
+
+      await page.getByTestId("composer-editor").fill("scroll to newest message");
+      const sendButton = await waitForSendButton();
+      sendButton.click();
+
+      await vi.waitFor(
+        () => {
+          const maxScrollTop = scrollContainer.scrollHeight - scrollContainer.clientHeight;
+          expect(scrollContainer.scrollTop).toBeGreaterThanOrEqual(Math.max(0, maxScrollTop - 4));
+          expect(document.body.textContent).toContain("scroll to newest message");
+          expect(document.body.textContent).not.toContain("Scroll to bottom");
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("shows a pointer cursor for the running stop button", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,

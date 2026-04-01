@@ -175,6 +175,20 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         runtimePayload: toRuntimePayloadFromSession(session, extra),
       });
 
+    const readConfiguredResumeCursor = (event: ProviderRuntimeEvent): unknown | undefined => {
+      if (event.type !== "session.configured") {
+        return undefined;
+      }
+      if (!("payload" in event) || !event.payload || typeof event.payload !== "object") {
+        return undefined;
+      }
+      const config = (event.payload as Record<string, unknown>).config;
+      if (!config || typeof config !== "object") {
+        return undefined;
+      }
+      return (config as Record<string, unknown>).resumeCursor;
+    };
+
     const providers = yield* registry.listProviders();
     const adapters = yield* Effect.forEach(providers, (provider) =>
       registry.getByProvider(provider),
@@ -204,10 +218,17 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           return;
         }
 
-        yield* upsertSessionBinding(session, event.threadId, {
-          lastRuntimeEvent: event.type,
-          lastRuntimeEventAt: event.createdAt,
-        });
+        const configuredResumeCursor = readConfiguredResumeCursor(event);
+        yield* upsertSessionBinding(
+          configuredResumeCursor !== undefined
+            ? Object.assign({}, session, { resumeCursor: configuredResumeCursor })
+            : session,
+          event.threadId,
+          {
+            lastRuntimeEvent: event.type,
+            lastRuntimeEventAt: event.createdAt,
+          },
+        );
       }).pipe(
         Effect.catch((cause) =>
           Effect.logWarning("failed to sync provider session binding from runtime event", {

@@ -408,6 +408,29 @@ export function getVisibleThreadsForProject<T extends Pick<Thread, "id">>(input:
   };
 }
 
+export function limitThreadsForProjectHistory<T extends Pick<Thread, "id">>(input: {
+  threads: readonly T[];
+  activeThreadId: T["id"] | undefined;
+  historyLimit: number;
+}): T[] {
+  const { activeThreadId, historyLimit, threads } = input;
+  if (historyLimit <= 0 || threads.length <= historyLimit) {
+    return [...threads];
+  }
+
+  const limitedThreads = threads.slice(0, historyLimit);
+  if (!activeThreadId || limitedThreads.some((thread) => thread.id === activeThreadId)) {
+    return limitedThreads;
+  }
+
+  const activeThread = threads.find((thread) => thread.id === activeThreadId);
+  if (!activeThread) {
+    return limitedThreads;
+  }
+
+  return [...limitedThreads, activeThread];
+}
+
 function toSortableTimestamp(iso: string | undefined): number | null {
   if (!iso) return null;
   const ms = Date.parse(iso);

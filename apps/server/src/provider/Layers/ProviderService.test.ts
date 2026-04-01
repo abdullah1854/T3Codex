@@ -195,6 +195,22 @@ function makeFakeCodexAdapter(provider: ProviderKind = "codex") {
   };
 
   const emit = (event: LegacyProviderRuntimeEvent): void => {
+    if (event.type === "session.configured") {
+      const payload = event.payload as
+        | {
+            config?: {
+              resumeCursor?: unknown;
+            };
+          }
+        | undefined;
+      if (payload?.config?.resumeCursor !== undefined) {
+        updateSession(event.threadId, (existing) => ({
+          ...existing,
+          resumeCursor: payload.config?.resumeCursor,
+          updatedAt: event.createdAt,
+        }));
+      }
+    }
     Effect.runSync(PubSub.publish(runtimeEventPubSub, event as unknown as ProviderRuntimeEvent));
   };
 
@@ -812,6 +828,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         threadId: asThreadId("thread-runtime-resume"),
         runtimeMode: "full-access",
       });
+      yield* sleep(50);
 
       routing.codex.updateSession(session.threadId, (existing) => ({
         ...existing,
@@ -830,11 +847,23 @@ routing.layer("ProviderServiceLive routing", (it) => {
           },
         },
       });
-      yield* sleep(50);
-
-      const persistedRuntime = yield* runtimeRepository.getByThreadId({
+      let persistedRuntime = yield* runtimeRepository.getByThreadId({
         threadId: session.threadId,
       });
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        const resumeCursor = Option.getOrUndefined(persistedRuntime)?.resumeCursor as
+          | { opaque?: unknown }
+          | null
+          | undefined;
+        if (resumeCursor?.opaque === "runtime-resume-cursor") {
+          break;
+        }
+        yield* sleep(25);
+        persistedRuntime = yield* runtimeRepository.getByThreadId({
+          threadId: session.threadId,
+        });
+      }
+
       assert.equal(Option.isSome(persistedRuntime), true);
       if (Option.isSome(persistedRuntime)) {
         assert.deepEqual(persistedRuntime.value.resumeCursor, {

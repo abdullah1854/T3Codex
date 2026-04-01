@@ -6,6 +6,7 @@ import {
   resolveAdjacentThreadId,
   getFallbackThreadIdAfterDelete,
   getVisibleThreadsForProject,
+  limitThreadsForProjectHistory,
   getProjectSortTimestamp,
   hasUnseenCompletion,
   isContextMenuPointerDown,
@@ -583,6 +584,47 @@ describe("getVisibleThreadsForProject", () => {
       threads.map((thread) => thread.id),
     );
     expect(result.hiddenThreads).toEqual([]);
+  });
+});
+
+describe("limitThreadsForProjectHistory", () => {
+  it("caps project thread history to the requested limit", () => {
+    const threads = Array.from({ length: 12 }, (_, index) =>
+      makeThread({
+        id: ThreadId.makeUnsafe(`thread-${index + 1}`),
+        title: `Thread ${index + 1}`,
+      }),
+    );
+
+    const result = limitThreadsForProjectHistory({
+      threads,
+      activeThreadId: undefined,
+      historyLimit: 10,
+    });
+
+    expect(result.map((thread) => thread.id)).toEqual(
+      Array.from({ length: 10 }, (_, index) => ThreadId.makeUnsafe(`thread-${index + 1}`)),
+    );
+  });
+
+  it("keeps the active thread visible even when it falls outside the capped history window", () => {
+    const threads = Array.from({ length: 12 }, (_, index) =>
+      makeThread({
+        id: ThreadId.makeUnsafe(`thread-${index + 1}`),
+        title: `Thread ${index + 1}`,
+      }),
+    );
+
+    const result = limitThreadsForProjectHistory({
+      threads,
+      activeThreadId: ThreadId.makeUnsafe("thread-12"),
+      historyLimit: 10,
+    });
+
+    expect(result.map((thread) => thread.id)).toEqual([
+      ...Array.from({ length: 10 }, (_, index) => ThreadId.makeUnsafe(`thread-${index + 1}`)),
+      ThreadId.makeUnsafe("thread-12"),
+    ]);
   });
 });
 

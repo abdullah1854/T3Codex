@@ -5,7 +5,7 @@ import {
   FolderSearchIcon,
   ShieldCheckIcon,
 } from "lucide-react";
-import { memo } from "react";
+import { memo, useState } from "react";
 import type { WorkspaceCodexSummary } from "~/workspaceCodex";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
@@ -48,6 +48,8 @@ export const WorkspaceCodexControl = memo(function WorkspaceCodexControl({
   onOpenPath,
   onOpenWorkspace,
 }: WorkspaceCodexControlProps) {
+  const [isOpen, setIsOpen] = useState(false);
+
   const resolvedSummary = summary ?? {
     hasAgentsMd: false,
     hasConfigToml: false,
@@ -69,7 +71,7 @@ export const WorkspaceCodexControl = memo(function WorkspaceCodexControl({
   const visibleAgents = resolvedSummary.agents.slice(0, MAX_VISIBLE_CODEX_ENTRIES);
 
   return (
-    <Menu>
+    <Menu open={isOpen} onOpenChange={setIsOpen}>
       <MenuTrigger
         render={
           <Button

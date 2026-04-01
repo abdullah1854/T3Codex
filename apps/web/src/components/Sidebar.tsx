@@ -110,6 +110,7 @@ import { isNonEmpty as isNonEmptyString } from "effect/String";
 import {
   getVisibleSidebarThreadIds,
   getVisibleThreadsForProject,
+  limitThreadsForProjectHistory,
   resolveAdjacentThreadId,
   isContextMenuPointerDown,
   resolveProjectStatusIndicator,
@@ -128,6 +129,7 @@ import { useSettings, useUpdateSettings } from "~/hooks/useSettings";
 import type { Project, Thread } from "../types";
 
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
+const PROJECT_THREAD_HISTORY_LIMIT = 10;
 const THREAD_PREVIEW_LIMIT = 6;
 const SIDEBAR_SORT_LABELS: Record<SidebarProjectSortOrder, string> = {
   updated_at: "Last user message",
@@ -1169,10 +1171,14 @@ export default function Sidebar() {
   const renderedProjects = useMemo(
     () =>
       sortedProjects.map((project) => {
-        const projectThreads = sortThreadsForSidebar(
-          visibleThreads.filter((thread) => thread.projectId === project.id),
-          appSettings.sidebarThreadSortOrder,
-        );
+        const projectThreads = limitThreadsForProjectHistory({
+          threads: sortThreadsForSidebar(
+            visibleThreads.filter((thread) => thread.projectId === project.id),
+            appSettings.sidebarThreadSortOrder,
+          ),
+          activeThreadId: routeThreadId ?? undefined,
+          historyLimit: PROJECT_THREAD_HISTORY_LIMIT,
+        });
         const threadStatuses = new Map(
           projectThreads.map((thread) => [
             thread.id,

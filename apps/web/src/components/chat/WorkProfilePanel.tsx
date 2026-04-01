@@ -14,6 +14,12 @@ import {
   type WorkProfilePreflight,
   type WorkProfilePreflightField,
 } from "~/workProfiles";
+import {
+  buildCollapsedWorkProfileSummaryBadges,
+  buildRepoCodexBadges,
+  buildRepoCodexMessage,
+  buildWorkspaceDefaultBadges,
+} from "./WorkProfilePanel.logic";
 
 interface WorkProfilePanelProps {
   disabled: boolean;
@@ -76,44 +82,18 @@ export const WorkProfilePanel = memo(function WorkProfilePanel({
   suggestedWorkspaceCodexProfile,
   workspaceCodexSummary,
 }: WorkProfilePanelProps) {
-  const repoCodexBadges = [
-    workspaceCodexSummary?.hasAgentsMd ? "AGENTS.md" : null,
-    workspaceCodexSummary?.hasConfigToml ? ".codex/config" : null,
-    workspaceCodexSummary && workspaceCodexSummary.profiles.length > 0
-      ? `${workspaceCodexSummary.profiles.length} profile${workspaceCodexSummary.profiles.length === 1 ? "" : "s"}`
-      : null,
-    workspaceCodexSummary && workspaceCodexSummary.skills.length > 0
-      ? `${workspaceCodexSummary.skills.length} skill${workspaceCodexSummary.skills.length === 1 ? "" : "s"}`
-      : null,
-    workspaceCodexSummary && workspaceCodexSummary.agents.length > 0
-      ? `${workspaceCodexSummary.agents.length} agent${workspaceCodexSummary.agents.length === 1 ? "" : "s"}`
-      : null,
-  ].filter((value): value is string => value !== null);
-  const repoCodexMessage =
-    repoCodexBadges.length === 0
-      ? null
-      : profile.id === "planning"
-        ? "This repo already defines Codex rules and helpers. Planning mode will layer on top of that workspace setup."
-        : profile.id === "research"
-          ? "This repo already defines Codex rules and helpers. Research mode should use those repo-local skills before adding generic instructions."
-          : "This repo already defines Codex rules and helpers. Your selected workflow will run with that workspace context in play.";
-  const workspaceDefaultBadges = [
-    workspaceCodexSummary?.workspaceDefaults?.modelSelection?.model ?? null,
-    workspaceCodexSummary?.workspaceDefaults?.reasoningEffort
-      ? `${workspaceCodexSummary.workspaceDefaults.reasoningEffort} reasoning`
-      : null,
-    workspaceCodexSummary?.workspaceDefaults?.planModeReasoningEffort
-      ? `plan ${workspaceCodexSummary.workspaceDefaults.planModeReasoningEffort}`
-      : null,
-    workspaceCodexSummary?.workspaceDefaults?.runtimeMode === "full-access"
-      ? "full access"
-      : workspaceCodexSummary?.workspaceDefaults?.runtimeMode === "approval-required"
-        ? "approval required"
-        : null,
-    workspaceCodexSummary?.workspaceDefaults?.webSearchMode
-      ? `web ${workspaceCodexSummary.workspaceDefaults.webSearchMode}`
-      : null,
-  ].filter((value): value is string => value !== null);
+  const repoCodexBadges = buildRepoCodexBadges(workspaceCodexSummary);
+  const repoCodexMessage = buildRepoCodexMessage({
+    profileId: profile.id,
+    repoCodexBadges,
+  });
+  const workspaceDefaultBadges = buildWorkspaceDefaultBadges(workspaceCodexSummary);
+  const collapsedSummaryBadges = buildCollapsedWorkProfileSummaryBadges({
+    projectSpecialization,
+    selectedWorkspaceCodexProfile,
+    suggestedWorkspaceCodexProfile,
+    workspaceDefaultBadges,
+  });
 
   return (
     <div className="mb-3 rounded-2xl border border-border/70 bg-muted/15 p-2.5 sm:p-3">
@@ -125,112 +105,125 @@ export const WorkProfilePanel = memo(function WorkProfilePanel({
             </Badge>
             <span className="text-sm font-medium text-foreground">{profile.label}</span>
           </div>
-          <p className="text-xs leading-relaxed text-muted-foreground">{profile.description}</p>
-          {projectSpecialization ? (
-            <div className="space-y-1 pt-1">
-              <div className="flex flex-wrap items-center gap-1.5">
-                <Badge variant="outline" size="sm">
-                  Project specialization
-                </Badge>
-                <Badge variant="secondary" size="sm">
-                  {projectSpecialization.label}
-                </Badge>
-              </div>
-              <p className="text-[11px] leading-relaxed text-muted-foreground">
-                {projectSpecialization.description}
-              </p>
-              <div className="flex flex-wrap items-center gap-1.5">
-                {projectSpecialization.focusAreas.map((focusArea) => (
-                  <Badge key={focusArea} variant="secondary" size="sm">
-                    {focusArea}
-                  </Badge>
-                ))}
-              </div>
-            </div>
-          ) : null}
-          {repoCodexBadges.length > 0 ? (
-            <div className="space-y-1 pt-1">
-              <div className="flex flex-wrap items-center gap-1.5">
-                <Badge variant="outline" size="sm">
-                  Repo Codex
-                </Badge>
-                {repoCodexBadges.map((badge) => (
-                  <Badge key={badge} variant="secondary" size="sm">
-                    {badge}
-                  </Badge>
-                ))}
-              </div>
-              <p className="text-[11px] leading-relaxed text-muted-foreground">
-                {repoCodexMessage}
-              </p>
-              {workspaceCodexSummary && workspaceCodexSummary.profiles.length > 0 ? (
-                <div className="space-y-1">
+          {expanded ? (
+            <>
+              <p className="text-xs leading-relaxed text-muted-foreground">{profile.description}</p>
+              {projectSpecialization ? (
+                <div className="space-y-1 pt-1">
                   <div className="flex flex-wrap items-center gap-1.5">
-                    <span className="text-[11px] leading-relaxed text-muted-foreground">
-                      Named Codex profiles:{" "}
-                      {workspaceCodexSummary.profiles.map((profile) => profile.name).join(", ")}
-                    </span>
-                    {suggestedWorkspaceCodexProfile ? (
-                      <Badge variant="outline" size="sm">
-                        Best match: {suggestedWorkspaceCodexProfile.name}
-                      </Badge>
-                    ) : null}
+                    <Badge variant="outline" size="sm">
+                      Project specialization
+                    </Badge>
+                    <Badge variant="secondary" size="sm">
+                      {projectSpecialization.label}
+                    </Badge>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <Select
-                      value={selectedWorkspaceCodexProfile?.name ?? "__workspace_default__"}
-                      onValueChange={(value) =>
-                        onWorkspaceCodexProfileChange(
-                          value === "__workspace_default__" ? null : value,
-                        )
-                      }
-                    >
-                      <SelectTrigger
-                        size="sm"
-                        className="w-full min-w-44 sm:w-52"
-                        aria-label="Select repo-local Codex profile"
-                      >
-                        <SelectValue>
-                          {selectedWorkspaceCodexProfile?.name ?? "Repo default"}
-                        </SelectValue>
-                      </SelectTrigger>
-                      <SelectPopup align="start" alignItemWithTrigger={false}>
-                        <SelectItem hideIndicator value="__workspace_default__">
-                          Repo default
-                        </SelectItem>
-                        {workspaceCodexSummary.profiles.map((workspaceProfile) => (
-                          <SelectItem
-                            hideIndicator
-                            key={workspaceProfile.name}
-                            value={workspaceProfile.name}
-                          >
-                            {workspaceProfile.name}
-                          </SelectItem>
-                        ))}
-                      </SelectPopup>
-                    </Select>
+                  <p className="text-[11px] leading-relaxed text-muted-foreground">
+                    {projectSpecialization.description}
+                  </p>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {projectSpecialization.focusAreas.map((focusArea) => (
+                      <Badge key={focusArea} variant="secondary" size="sm">
+                        {focusArea}
+                      </Badge>
+                    ))}
                   </div>
                 </div>
               ) : null}
-            </div>
-          ) : null}
-          {workspaceDefaultBadges.length > 0 ? (
-            <div className="space-y-1 pt-1">
-              <div className="flex flex-wrap items-center gap-1.5">
-                <Badge variant="outline" size="sm">
-                  Workspace defaults
+              {repoCodexBadges.length > 0 ? (
+                <div className="space-y-1 pt-1">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <Badge variant="outline" size="sm">
+                      Repo Codex
+                    </Badge>
+                    {repoCodexBadges.map((badge) => (
+                      <Badge key={badge} variant="secondary" size="sm">
+                        {badge}
+                      </Badge>
+                    ))}
+                  </div>
+                  <p className="text-[11px] leading-relaxed text-muted-foreground">
+                    {repoCodexMessage}
+                  </p>
+                  {workspaceCodexSummary && workspaceCodexSummary.profiles.length > 0 ? (
+                    <div className="space-y-1">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="text-[11px] leading-relaxed text-muted-foreground">
+                          Named Codex profiles:{" "}
+                          {workspaceCodexSummary.profiles.map((profile) => profile.name).join(", ")}
+                        </span>
+                        {suggestedWorkspaceCodexProfile ? (
+                          <Badge variant="outline" size="sm">
+                            Best match: {suggestedWorkspaceCodexProfile.name}
+                          </Badge>
+                        ) : null}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Select
+                          value={selectedWorkspaceCodexProfile?.name ?? "__workspace_default__"}
+                          onValueChange={(value) =>
+                            onWorkspaceCodexProfileChange(
+                              value === "__workspace_default__" ? null : value,
+                            )
+                          }
+                        >
+                          <SelectTrigger
+                            size="sm"
+                            className="w-full min-w-44 sm:w-52"
+                            aria-label="Select repo-local Codex profile"
+                          >
+                            <SelectValue>
+                              {selectedWorkspaceCodexProfile?.name ?? "Repo default"}
+                            </SelectValue>
+                          </SelectTrigger>
+                          <SelectPopup align="start" alignItemWithTrigger={false}>
+                            <SelectItem hideIndicator value="__workspace_default__">
+                              Repo default
+                            </SelectItem>
+                            {workspaceCodexSummary.profiles.map((workspaceProfile) => (
+                              <SelectItem
+                                hideIndicator
+                                key={workspaceProfile.name}
+                                value={workspaceProfile.name}
+                              >
+                                {workspaceProfile.name}
+                              </SelectItem>
+                            ))}
+                          </SelectPopup>
+                        </Select>
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+              {workspaceDefaultBadges.length > 0 ? (
+                <div className="space-y-1 pt-1">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <Badge variant="outline" size="sm">
+                      Workspace defaults
+                    </Badge>
+                    {workspaceDefaultBadges.map((badge) => (
+                      <Badge key={badge} variant="secondary" size="sm">
+                        {badge}
+                      </Badge>
+                    ))}
+                  </div>
+                  <p className="text-[11px] leading-relaxed text-muted-foreground">
+                    Untouched new drafts pick up these repo-local Codex defaults automatically.
+                  </p>
+                </div>
+              ) : null}
+            </>
+          ) : (
+            <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+              <span className="text-xs text-muted-foreground">{profile.shortLabel}</span>
+              {collapsedSummaryBadges.map((badge) => (
+                <Badge key={badge} variant="secondary" size="sm">
+                  {badge}
                 </Badge>
-                {workspaceDefaultBadges.map((badge) => (
-                  <Badge key={badge} variant="secondary" size="sm">
-                    {badge}
-                  </Badge>
-                ))}
-              </div>
-              <p className="text-[11px] leading-relaxed text-muted-foreground">
-                Untouched new drafts pick up these repo-local Codex defaults automatically.
-              </p>
+              ))}
             </div>
-          ) : null}
+          )}
         </div>
         <div className="flex items-center gap-2">
           <Select
@@ -258,13 +251,14 @@ export const WorkProfilePanel = memo(function WorkProfilePanel({
             variant="outline"
             className="shrink-0"
             onClick={onToggleExpanded}
+            aria-label={expanded ? "Collapse workflow details" : "Expand workflow details"}
           >
             {expanded ? (
               <ChevronDownIcon className="size-3.5" />
             ) : (
               <ChevronRightIcon className="size-3.5" />
             )}
-            Preflight
+            {expanded ? "Collapse" : "Details"}
           </Button>
         </div>
       </div>
