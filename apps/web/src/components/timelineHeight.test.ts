@@ -126,6 +126,16 @@ describe("estimateTimelineMessageHeight", () => {
     expect(estimateTimelineMessageHeight(message, { timelineWidthPx: 320 })).toBe(118);
   });
 
+  it("adds extra narrow-layout wrap budget for very long unbroken user tokens", () => {
+    const message = {
+      role: "user" as const,
+      text: "x".repeat(3_200),
+    };
+
+    expect(estimateTimelineMessageHeight(message, { timelineWidthPx: 320 })).toBe(3_044);
+    expect(estimateTimelineMessageHeight(message, { timelineWidthPx: 430 })).toBe(2_010);
+  });
+
   it("uses narrower width to increase assistant line wrapping", () => {
     const message = {
       role: "assistant" as const,

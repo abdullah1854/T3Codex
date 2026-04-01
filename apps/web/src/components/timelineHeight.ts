@@ -16,6 +16,8 @@ const USER_MONO_AVG_CHAR_WIDTH_PX = 8.4;
 const ASSISTANT_AVG_CHAR_WIDTH_PX = 7.2;
 const MIN_USER_CHARS_PER_LINE = 4;
 const MIN_ASSISTANT_CHARS_PER_LINE = 20;
+const LONG_UNBROKEN_USER_TOKEN_THRESHOLD = 200;
+const LONG_UNBROKEN_USER_WRAP_WIDTH_THRESHOLD_PX = 360;
 
 interface TimelineMessageHeightInput {
   role: "user" | "assistant" | "system";
@@ -66,6 +68,22 @@ function estimateCharsPerLineForAssistant(timelineWidthPx: number | null): numbe
   );
 }
 
+function hasLongUnbrokenToken(text: string, minLength: number): boolean {
+  let currentTokenLength = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    const charCode = text.charCodeAt(index);
+    if (charCode === 10 || charCode === 13 || charCode === 9 || charCode === 32) {
+      if (currentTokenLength >= minLength) {
+        return true;
+      }
+      currentTokenLength = 0;
+      continue;
+    }
+    currentTokenLength += 1;
+  }
+  return currentTokenLength >= minLength;
+}
+
 export function estimateTimelineMessageHeight(
   message: TimelineMessageHeightInput,
   layout: TimelineHeightEstimateLayout = { timelineWidthPx: null },
@@ -77,7 +95,7 @@ export function estimateTimelineMessageHeight(
   }
 
   if (message.role === "user") {
-    const charsPerLine = estimateCharsPerLineForUser(layout.timelineWidthPx);
+    let charsPerLine = estimateCharsPerLineForUser(layout.timelineWidthPx);
     const displayedUserMessage = deriveDisplayedUserMessageState(message.text);
     const renderedText =
       displayedUserMessage.contexts.length > 0
@@ -88,6 +106,13 @@ export function estimateTimelineMessageHeight(
             .filter((part) => part.length > 0)
             .join(" ")
         : displayedUserMessage.visibleText;
+    if (
+      isFinitePositiveNumber(layout.timelineWidthPx) &&
+      layout.timelineWidthPx <= LONG_UNBROKEN_USER_WRAP_WIDTH_THRESHOLD_PX &&
+      hasLongUnbrokenToken(renderedText, LONG_UNBROKEN_USER_TOKEN_THRESHOLD)
+    ) {
+      charsPerLine = Math.max(MIN_USER_CHARS_PER_LINE, charsPerLine - 2);
+    }
     const estimatedLines = estimateWrappedLineCount(renderedText, charsPerLine);
     const attachmentCount = message.attachments?.length ?? 0;
     const attachmentRows = Math.ceil(attachmentCount / ATTACHMENTS_PER_ROW);

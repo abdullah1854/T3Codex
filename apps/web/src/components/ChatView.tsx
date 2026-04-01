@@ -177,6 +177,12 @@ import { ComposerPendingApprovalPanel } from "./chat/ComposerPendingApprovalPane
 import { ComposerPendingUserInputPanel } from "./chat/ComposerPendingUserInputPanel";
 import { ComposerPlanFollowUpBanner } from "./chat/ComposerPlanFollowUpBanner";
 import { HandoffDialog } from "./chat/HandoffDialog";
+import { QueuedComposerSubmissionsPanel } from "./chat/QueuedComposerSubmissionsPanel";
+import {
+  buildComposerSubmissionTitleSeed,
+  buildQueuedComposerSubmissionPreview,
+  type QueuedComposerSubmission,
+} from "./chat/queuedComposerSubmissions";
 import {
   getComposerProviderState,
   renderProviderTraitsMenuContent,
@@ -220,6 +226,10 @@ import {
   waitForStartedServerThread,
 } from "./ChatView.logic";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
+import {
+  useQueuedComposerSubmissionStore,
+  useQueuedComposerSubmissions,
+} from "../queuedComposerSubmissionStore";
 import { resolveProjectSpecialization } from "../projectSpecializations";
 
 const ATTACHMENT_PREVIEW_HANDOFF_TTL_MS = 5000;
@@ -391,41 +401,6 @@ interface PendingPullRequestSetupRequest {
   threadId: ThreadId;
   worktreePath: string;
   scriptId: string;
-}
-
-interface QueuedComposerSubmission {
-  id: string;
-  threadId: ThreadId;
-  interactionMode: ProviderInteractionMode;
-  terminalContexts: TerminalContextDraft[];
-  images: ComposerImageAttachment[];
-  modelSelection: ModelSelection;
-  outgoingMessageText: string;
-  prompt: string;
-  runtimeMode: RuntimeMode;
-  titleSeed: string;
-}
-
-function buildComposerSubmissionTitleSeed(input: {
-  trimmedPrompt: string;
-  images: readonly Pick<ComposerImageAttachment, "name">[];
-  terminalContexts: readonly TerminalContextDraft[];
-}): string {
-  if (input.trimmedPrompt) {
-    return truncate(input.trimmedPrompt);
-  }
-
-  const firstComposerImage = input.images[0];
-  if (firstComposerImage) {
-    return truncate(`Image: ${firstComposerImage.name}`);
-  }
-
-  const firstTerminalContext = input.terminalContexts[0];
-  if (firstTerminalContext) {
-    return truncate(formatTerminalContextLabel(firstTerminalContext));
-  }
-
-  return "New thread";
 }
 
 function useLocalDispatchState(input: {
@@ -667,9 +642,13 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const processingQueuedComposerSubmissionIdRef = useRef<string | null>(null);
   const dragDepthRef = useRef(0);
   const terminalOpenByThreadRef = useRef<Record<string, boolean>>({});
-  const [queuedComposerSubmissions, setQueuedComposerSubmissions] = useState<
-    QueuedComposerSubmission[]
-  >([]);
+  const queuedComposerSubmissions = useQueuedComposerSubmissions(threadId);
+  const enqueueQueuedComposerSubmission = useQueuedComposerSubmissionStore(
+    (store) => store.enqueueQueuedComposerSubmission,
+  );
+  const removeQueuedComposerSubmission = useQueuedComposerSubmissionStore(
+    (store) => store.removeQueuedComposerSubmission,
+  );
   const setMessagesScrollContainerRef = useCallback((element: HTMLDivElement | null) => {
     messagesScrollRef.current = element;
     setMessagesScrollElement(element);
@@ -1120,14 +1099,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
     activeThread?.modelSelection.provider ?? activeProject?.defaultModelSelection?.provider ?? null;
   const profileProvider = getWorkProfileProvider(activeWorkProfile);
   const hasThreadStarted = threadHasStarted(activeThread);
-  const queuedComposerSubmissionCount = useMemo(
-    () =>
-      activeThread?.id
-        ? queuedComposerSubmissions.filter((submission) => submission.threadId === activeThread.id)
-            .length
-        : 0,
-    [activeThread?.id, queuedComposerSubmissions],
-  );
+  const queuedComposerSubmissionCount = queuedComposerSubmissions.length;
   const lockedProvider: ProviderKind | null = hasThreadStarted
     ? (sessionProvider ?? threadProvider ?? selectedProviderByThreadId ?? null)
     : null;
@@ -1301,6 +1273,18 @@ export default function ChatView({ threadId }: ChatViewProps) {
     latestTurnSettled &&
     hasActionableProposedPlan(activeProposedPlan);
   const activePendingApproval = pendingApprovals[0] ?? null;
+  const queuedComposerSubmissionBlockedReason =
+    queuedComposerSubmissionCount === 0
+      ? null
+      : activePendingApproval
+        ? "Resolve the pending approval before queued messages can continue."
+        : activePendingUserInput
+          ? "Answer the pending questions before queued messages can continue."
+          : phase === "running"
+            ? "Queued messages will send when the current turn finishes."
+            : isConnecting
+              ? "Reconnect to keep queued messages moving."
+              : null;
   const {
     beginLocalDispatch,
     resetLocalDispatch,
@@ -3290,26 +3274,30 @@ export default function ChatView({ threadId }: ChatViewProps) {
         effort: effectiveSelectedPromptEffort,
         text: messageTextForSend || IMAGE_ONLY_BOOTSTRAP_PROMPT,
       });
+      const titleSeed = buildComposerSubmissionTitleSeed({
+        trimmedPrompt: trimmed,
+        images: composerImagesSnapshot,
+        terminalContexts: composerTerminalContextsSnapshot,
+        formatTerminalContextLabel,
+      });
 
-      setQueuedComposerSubmissions((existing) => [
-        ...existing,
-        {
-          id: randomUUID(),
-          threadId: activeThread.id,
-          interactionMode,
-          terminalContexts: composerTerminalContextsSnapshot,
-          images: composerImagesSnapshot,
-          modelSelection: selectedModelSelection,
-          outgoingMessageText,
+      enqueueQueuedComposerSubmission({
+        id: randomUUID(),
+        createdAt: new Date().toISOString(),
+        threadId: activeThread.id,
+        interactionMode,
+        terminalContexts: composerTerminalContextsSnapshot,
+        images: composerImagesSnapshot,
+        modelSelection: selectedModelSelection,
+        outgoingMessageText,
+        preview: buildQueuedComposerSubmissionPreview({
           prompt: promptForSend,
-          runtimeMode,
-          titleSeed: buildComposerSubmissionTitleSeed({
-            trimmedPrompt: trimmed,
-            images: composerImagesSnapshot,
-            terminalContexts: composerTerminalContextsSnapshot,
-          }),
-        },
-      ]);
+          titleSeed,
+        }),
+        prompt: promptForSend,
+        runtimeMode,
+        titleSeed,
+      });
 
       if (expiredTerminalContextCount > 0) {
         const toastCopy = buildExpiredTerminalContextToastCopy(
@@ -3331,7 +3319,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
       toastManager.add({
         type: "info",
         title: "Message queued",
-        description: "It will send when the current turn finishes.",
+        description: "Review or remove it from the queue panel while it waits.",
       });
       return;
     }
@@ -3475,6 +3463,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
         trimmedPrompt: trimmed,
         images: composerImagesSnapshot,
         terminalContexts: composerTerminalContextsSnapshot,
+        formatTerminalContextLabel,
       });
       const threadCreateModelSelection: ModelSelection = buildModelSelection(
         selectedProvider,
@@ -4024,9 +4013,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
       return;
     }
 
-    const nextQueuedSubmission = queuedComposerSubmissions.find(
-      (submission) => submission.threadId === activeThread.id,
-    );
+    const nextQueuedSubmission = queuedComposerSubmissions[0];
     if (!nextQueuedSubmission) {
       return;
     }
@@ -4037,9 +4024,12 @@ export default function ChatView({ threadId }: ChatViewProps) {
         if (result === "deferred") {
           return;
         }
-        setQueuedComposerSubmissions((existing) =>
-          existing.filter((submission) => submission.id !== nextQueuedSubmission.id),
-        );
+        if (result === "failed") {
+          for (const image of nextQueuedSubmission.images) {
+            revokeBlobPreviewUrl(image.previewUrl);
+          }
+        }
+        removeQueuedComposerSubmission(nextQueuedSubmission.id);
       })
       .finally(() => {
         if (processingQueuedComposerSubmissionIdRef.current === nextQueuedSubmission.id) {
@@ -4055,6 +4045,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
     isSendBusy,
     phase,
     queuedComposerSubmissions,
+    removeQueuedComposerSubmission,
   ]);
 
   const onProviderModelSelect = useCallback(
@@ -4390,6 +4381,20 @@ export default function ChatView({ threadId }: ChatViewProps) {
       [groupId]: !existing[groupId],
     }));
   }, []);
+  const onRemoveQueuedComposerSubmission = useCallback(
+    (submissionId: string) => {
+      const removedSubmission = queuedComposerSubmissions.find(
+        (submission) => submission.id === submissionId,
+      );
+      if (removedSubmission) {
+        for (const image of removedSubmission.images) {
+          revokeBlobPreviewUrl(image.previewUrl);
+        }
+      }
+      removeQueuedComposerSubmission(submissionId);
+    },
+    [queuedComposerSubmissions, removeQueuedComposerSubmission],
+  );
   const onExpandTimelineImage = useCallback((preview: ExpandedImagePreview) => {
     setExpandedImage(preview);
   }, []);
@@ -4764,6 +4769,11 @@ export default function ChatView({ threadId }: ChatViewProps) {
                         }
                       />
                     ) : null}
+                    <QueuedComposerSubmissionsPanel
+                      items={queuedComposerSubmissions}
+                      blockedReason={queuedComposerSubmissionBlockedReason}
+                      onRemove={onRemoveQueuedComposerSubmission}
+                    />
                     <ComposerPromptEditor
                       ref={composerEditorRef}
                       value={

@@ -1,13 +1,7 @@
 # TODO
 
-## Small things
+## Next up
 
-- [ ] Submitting new messages should scroll to bottom
-- [ ] Only show last 10 threads for a given project
-- [ ] Thread archiving
-- [ ] New projects should go on top
-- [ ] Projects should be sorted by latest thread update
-
-## Bigger things
-
-- [ ] Queueing messages
+- [ ] Keep queued messages moving even when the user switches to another thread
+- [ ] Split `ChatView` scroll/composer orchestration into dedicated hooks/components
+- [ ] Add browser coverage for archived-thread recovery and sidebar sorting controls

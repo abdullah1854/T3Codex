@@ -32,6 +32,7 @@ import {
   removeInlineTerminalContextPlaceholder,
 } from "../lib/terminalContext";
 import { isMacPlatform } from "../lib/utils";
+import { useQueuedComposerSubmissionStore } from "../queuedComposerSubmissionStore";
 import { getRouter } from "../router";
 import { useStore } from "../store";
 import { estimateTimelineMessageHeight } from "./timelineHeight";
@@ -1145,6 +1146,9 @@ describe("ChatView timeline estimator parity (full app)", () => {
       stickyModelSelectionByProvider: {},
       stickyActiveProvider: null,
     });
+    useQueuedComposerSubmissionStore.setState({
+      queuedComposerSubmissions: [],
+    });
     useStore.setState({
       projects: [],
       threads: [],
@@ -2104,6 +2108,221 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
+  it("lets the user remove queued messages before they send", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-queued-send-remove" as MessageId,
+        targetText: "queued remove target",
+        sessionStatus: "running",
+      }),
+    });
+
+    try {
+      await page.getByTestId("composer-editor").fill("first queued message");
+      await (await waitForButtonByText("Queue")).click();
+      await page.getByTestId("composer-editor").fill("second queued message");
+      await (await waitForButtonByText("Queue")).click();
+
+      await vi.waitFor(
+        () => {
+          expect(document.body.textContent).toContain("2 queued messages");
+          expect(document.body.textContent).toContain("first queued message");
+          expect(document.body.textContent).toContain("second queued message");
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      const removeFirstQueuedMessageButton = await waitForElement(
+        () =>
+          document.querySelector<HTMLButtonElement>('button[aria-label="Remove queued message 1"]'),
+        "Unable to find the remove queued message button.",
+      );
+      removeFirstQueuedMessageButton.click();
+
+      await vi.waitFor(
+        () => {
+          expect(document.body.textContent).toContain("1 queued message");
+          expect(document.body.textContent).not.toContain("first queued message");
+          expect(document.body.textContent).toContain("second queued message");
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      useStore.setState((state) => ({
+        ...state,
+        threads: state.threads.map((thread) =>
+          thread.id === THREAD_ID
+            ? {
+                ...thread,
+                latestTurn: {
+                  turnId: "turn-queued-remove-complete" as TurnId,
+                  state: "completed",
+                  requestedAt: isoAt(2_100),
+                  startedAt: isoAt(2_101),
+                  completedAt: isoAt(2_102),
+                  assistantMessageId: null,
+                },
+                session: thread.session
+                  ? {
+                      ...thread.session,
+                      status: "ready",
+                      updatedAt: isoAt(2_102),
+                    }
+                  : null,
+              }
+            : thread,
+        ),
+      }));
+
+      await vi.waitFor(
+        () => {
+          const turnStartRequests = wsRequests.filter(
+            (request) =>
+              request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+              (request as { command?: { type?: string; message?: { text?: string } } }).command
+                ?.type === "thread.turn.start",
+          );
+          expect(turnStartRequests).toHaveLength(1);
+          expect(
+            (
+              turnStartRequests[0] as {
+                command?: { message?: { text?: string } };
+              }
+            ).command?.message?.text,
+          ).toContain("second queued message");
+          expect(
+            (
+              turnStartRequests[0] as {
+                command?: { message?: { text?: string } };
+              }
+            ).command?.message?.text,
+          ).not.toContain("first queued message");
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("updates the work profile draft and preflight fields with repo Codex context", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-work-profile" as MessageId,
+        targetText: "work profile target",
+      }),
+      resolveRpc: (body) => {
+        if (body._tag === WS_METHODS.projectsSearchEntries) {
+          if (body.query === ".codex") {
+            return {
+              entries: [
+                {
+                  path: ".codex/config.toml",
+                  kind: "file",
+                  parentPath: ".codex",
+                },
+                {
+                  path: ".codex/skills/research/SKILL.md",
+                  kind: "file",
+                  parentPath: ".codex/skills/research",
+                },
+              ],
+              truncated: false,
+            };
+          }
+          if (body.query === "AGENTS.md") {
+            return {
+              entries: [
+                {
+                  path: "AGENTS.md",
+                  kind: "file",
+                },
+              ],
+              truncated: false,
+            };
+          }
+        }
+
+        if (body._tag === WS_METHODS.projectsReadTextFile) {
+          if (body.relativePath === ".codex/config.toml") {
+            return {
+              relativePath: ".codex/config.toml",
+              contents: [
+                'model = "gpt-5.4"',
+                'model_reasoning_effort = "medium"',
+                'web_search = "cached"',
+                "",
+                "[profiles.research-heavy]",
+                'model = "gpt-5.4"',
+                'model_reasoning_effort = "high"',
+                'web_search = "live"',
+              ].join("\n"),
+            };
+          }
+
+          if (body.relativePath === "AGENTS.md") {
+            return {
+              relativePath: "AGENTS.md",
+              contents: "# AGENTS.md\nUse repo-local helpers first.\n",
+            };
+          }
+        }
+
+        return undefined;
+      },
+    });
+
+    try {
+      const detailsButton = await waitForButtonByText("Details");
+      detailsButton.click();
+
+      const workflowTrigger = await waitForElement(
+        () =>
+          document.querySelector<HTMLButtonElement>('button[aria-label="Select workflow profile"]'),
+        "Unable to find the workflow profile trigger.",
+      );
+      workflowTrigger.click();
+      await page.getByText("Deep Research").click();
+
+      await vi.waitFor(
+        () => {
+          expect(document.body.textContent).toContain("Repo Codex");
+          expect(document.body.textContent).toContain("AGENTS.md");
+          expect(document.body.textContent).toContain("Best match: research-heavy");
+          expect(useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.workProfileId).toBe(
+            "research",
+          );
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      const systemInput = await waitForElement(
+        () =>
+          document.querySelector<HTMLInputElement>(
+            'input[placeholder="D365, AX, Maximo, Fabric, local app, VPS..."]',
+          ),
+        "Unable to find the work-profile system input.",
+      );
+      systemInput.focus();
+      await page
+        .getByPlaceholder("D365, AX, Maximo, Fabric, local app, VPS...")
+        .fill("API gateway");
+
+      await vi.waitFor(
+        () => {
+          expect(
+            useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.preflight.system,
+          ).toBe("API gateway");
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("sticks to the bottom when sending after scrolling up", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
@@ -2119,6 +2338,15 @@ describe("ChatView timeline estimator parity (full app)", () => {
         "Unable to find ChatView message scroll container.",
       );
 
+      await vi.waitFor(
+        () => {
+          const maxScrollTop = scrollContainer.scrollHeight - scrollContainer.clientHeight;
+          expect(maxScrollTop).toBeGreaterThan(0);
+          expect(scrollContainer.scrollTop).toBeGreaterThanOrEqual(Math.max(0, maxScrollTop - 4));
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
       scrollContainer.scrollTop = 0;
       scrollContainer.dispatchEvent(new Event("scroll"));
       await waitForLayout();
@@ -2132,6 +2360,41 @@ describe("ChatView timeline estimator parity (full app)", () => {
           const maxScrollTop = scrollContainer.scrollHeight - scrollContainer.clientHeight;
           expect(scrollContainer.scrollTop).toBeGreaterThanOrEqual(Math.max(0, maxScrollTop - 4));
           expect(document.body.textContent).toContain("scroll to newest message");
+          expect(document.body.textContent).not.toContain("Scroll to bottom");
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("shows a scroll-to-bottom pill and jumps back down when clicked", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-scroll-pill" as MessageId,
+        targetText: "scroll pill target",
+      }),
+    });
+
+    try {
+      const scrollContainer = await waitForElement(
+        () => document.querySelector<HTMLDivElement>("div.overflow-y-auto.overscroll-y-contain"),
+        "Unable to find ChatView message scroll container.",
+      );
+
+      scrollContainer.scrollTop = 0;
+      scrollContainer.dispatchEvent(new Event("scroll"));
+      await waitForLayout();
+
+      const scrollButton = await waitForButtonContainingText("Scroll to bottom");
+      scrollButton.click();
+
+      await vi.waitFor(
+        () => {
+          const maxScrollTop = scrollContainer.scrollHeight - scrollContainer.clientHeight;
+          expect(scrollContainer.scrollTop).toBeGreaterThanOrEqual(Math.max(0, maxScrollTop - 4));
           expect(document.body.textContent).not.toContain("Scroll to bottom");
         },
         { timeout: 8_000, interval: 16 },

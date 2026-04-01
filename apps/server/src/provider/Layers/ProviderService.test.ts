@@ -775,6 +775,29 @@ routing.layer("ProviderServiceLive routing", (it) => {
     }),
   );
 
+  it.effect("merges persisted resume cursor and runtime mode when listing active sessions", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+
+      const session = yield* provider.startSession(asThreadId("thread-list-merge"), {
+        provider: "codex",
+        threadId: asThreadId("thread-list-merge"),
+        runtimeMode: "full-access",
+      });
+
+      routing.codex.updateSession(session.threadId, (existing) => ({
+        ...existing,
+        resumeCursor: undefined,
+        runtimeMode: "approval-required",
+      }));
+
+      const sessions = yield* provider.listSessions();
+      assert.equal(sessions.length, 1);
+      assert.deepEqual(sessions[0]?.resumeCursor, session.resumeCursor);
+      assert.equal(sessions[0]?.runtimeMode, "full-access");
+    }),
+  );
+
   it.effect("persists runtime status transitions in provider_session_runtime", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;
@@ -814,6 +837,102 @@ routing.layer("ProviderServiceLive routing", (it) => {
           assert.equal(runtimePayload.lastError, null);
           assert.equal(runtimePayload.lastRuntimeEvent, "provider.sendTurn");
         }
+      }
+    }),
+  );
+
+  it.effect("persists session.state.changed runtime payload updates from runtime events", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const runtimeRepository = yield* ProviderSessionRuntimeRepository;
+
+      const session = yield* provider.startSession(asThreadId("thread-runtime-state"), {
+        provider: "codex",
+        threadId: asThreadId("thread-runtime-state"),
+        runtimeMode: "full-access",
+      });
+      yield* sleep(50);
+
+      routing.codex.updateSession(session.threadId, (existing) => ({
+        ...existing,
+        status: "running",
+        activeTurnId: asTurnId("turn-runtime-state"),
+        updatedAt: new Date(Date.now() + 1_000).toISOString(),
+      }));
+      routing.codex.emit({
+        type: "session.state.changed",
+        eventId: asEventId("evt-runtime-state"),
+        provider: "codex",
+        createdAt: new Date().toISOString(),
+        threadId: session.threadId,
+        payload: {
+          state: "running",
+        },
+      });
+      yield* sleep(50);
+
+      const persistedRuntime = yield* runtimeRepository.getByThreadId({
+        threadId: session.threadId,
+      });
+      assert.equal(Option.isSome(persistedRuntime), true);
+      if (Option.isSome(persistedRuntime)) {
+        assert.equal(persistedRuntime.value.status, "running");
+        const payload = persistedRuntime.value.runtimePayload as {
+          activeTurnId?: string | null;
+          lastRuntimeEvent?: string | null;
+        } | null;
+        assert.equal(payload?.activeTurnId, "turn-runtime-state");
+        assert.equal(payload?.lastRuntimeEvent, "session.state.changed");
+      }
+    }),
+  );
+
+  it.effect("persists turn.completed runtime payload updates from runtime events", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const runtimeRepository = yield* ProviderSessionRuntimeRepository;
+
+      const session = yield* provider.startSession(asThreadId("thread-runtime-complete"), {
+        provider: "codex",
+        threadId: asThreadId("thread-runtime-complete"),
+        runtimeMode: "full-access",
+      });
+      yield* provider.sendTurn({
+        threadId: session.threadId,
+        input: "hello",
+        attachments: [],
+      });
+      yield* sleep(50);
+
+      routing.codex.updateSession(session.threadId, (existing) => ({
+        ...existing,
+        status: "ready",
+        activeTurnId: undefined,
+        updatedAt: new Date(Date.now() + 1_000).toISOString(),
+      }));
+      routing.codex.emit({
+        type: "turn.completed",
+        eventId: asEventId("evt-runtime-complete"),
+        provider: "codex",
+        createdAt: new Date().toISOString(),
+        threadId: session.threadId,
+        turnId: asTurnId("turn-runtime-complete"),
+        status: "completed",
+      });
+      yield* sleep(50);
+
+      const persistedRuntime = yield* runtimeRepository.getByThreadId({
+        threadId: session.threadId,
+      });
+      assert.equal(Option.isSome(persistedRuntime), true);
+      if (Option.isSome(persistedRuntime)) {
+        assert.equal(persistedRuntime.value.status, "running");
+        const payload = persistedRuntime.value.runtimePayload as {
+          activeTurnId?: string | null;
+          lastRuntimeEvent?: string | null;
+        } | null;
+        assert.equal(payload?.activeTurnId ?? null, null);
+        assert.equal(payload?.lastRuntimeEvent, "turn.completed");
       }
     }),
   );
