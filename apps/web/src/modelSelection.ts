@@ -2,6 +2,7 @@ import {
   DEFAULT_GIT_TEXT_GENERATION_MODEL_BY_PROVIDER,
   type ModelSelection,
   type ProviderKind,
+  type ProviderModelOptions,
   type ServerProvider,
 } from "@t3tools/contracts";
 import { normalizeModelSlug, resolveSelectableModel } from "@t3tools/shared/model";
@@ -30,6 +31,38 @@ export interface AppModelOption {
   isCustom: boolean;
 }
 
+export type ModelSelectionForProvider<P extends ProviderKind> = Extract<
+  ModelSelection,
+  { provider: P }
+>;
+
+export function buildModelSelection<P extends ProviderKind>(
+  provider: P,
+  model: string,
+  options?: ProviderModelOptions[P],
+): ModelSelectionForProvider<P> {
+  switch (provider) {
+    case "codex":
+      return {
+        provider,
+        model,
+        ...(options ? { options } : {}),
+      } as ModelSelectionForProvider<P>;
+    case "claudeAgent":
+      return {
+        provider,
+        model,
+        ...(options ? { options } : {}),
+      } as ModelSelectionForProvider<P>;
+    case "droid":
+      return {
+        provider,
+        model,
+        ...(options ? { options } : {}),
+      } as ModelSelectionForProvider<P>;
+  }
+}
+
 const PROVIDER_CUSTOM_MODEL_CONFIG: Record<ProviderKind, ProviderCustomModelConfig> = {
   codex: {
     provider: "codex",
@@ -44,6 +77,13 @@ const PROVIDER_CUSTOM_MODEL_CONFIG: Record<ProviderKind, ProviderCustomModelConf
     description: "Save additional Claude model slugs for the picker and `/model` command.",
     placeholder: "your-claude-model-slug",
     example: "claude-sonnet-5-0",
+  },
+  droid: {
+    provider: "droid",
+    title: "Droid",
+    description: "Save additional Droid model slugs for the picker and `/model` command.",
+    placeholder: "your-droid-model-slug",
+    example: "custom:deepseek-v3",
   },
 };
 
@@ -165,6 +205,12 @@ export function getCustomModelOptionsByProvider(
       "claudeAgent",
       selectedProvider === "claudeAgent" ? selectedModel : undefined,
     ),
+    droid: getAppModelOptions(
+      settings,
+      providers,
+      "droid",
+      selectedProvider === "droid" ? selectedModel : undefined,
+    ),
   };
 }
 
@@ -192,9 +238,5 @@ export function resolveAppModelSelectionState(
     },
   });
 
-  return {
-    provider,
-    model,
-    ...(modelOptionsForDispatch ? { options: modelOptionsForDispatch } : {}),
-  };
+  return buildModelSelection(provider, model, modelOptionsForDispatch);
 }

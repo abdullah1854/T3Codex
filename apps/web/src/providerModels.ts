@@ -6,6 +6,7 @@ import {
   type ServerProviderModel,
 } from "@t3tools/contracts";
 import { normalizeModelSlug } from "@t3tools/shared/model";
+import { getProviderAvailability } from "./providerCatalog";
 
 const EMPTY_CAPABILITIES: ModelCapabilities = {
   reasoningEffortLevels: [],
@@ -33,7 +34,7 @@ export function isProviderEnabled(
   providers: ReadonlyArray<ServerProvider>,
   provider: ProviderKind,
 ): boolean {
-  return getProviderSnapshot(providers, provider)?.enabled ?? true;
+  return getProviderAvailability(getProviderSnapshot(providers, provider)).selectable;
 }
 
 export function resolveSelectableProvider(
@@ -44,7 +45,10 @@ export function resolveSelectableProvider(
   if (isProviderEnabled(providers, requested)) {
     return requested;
   }
-  return providers.find((candidate) => candidate.enabled)?.provider ?? requested;
+  return (
+    providers.find((candidate) => getProviderAvailability(candidate).selectable)?.provider ??
+    requested
+  );
 }
 
 export function getProviderModelCapabilities(

@@ -731,6 +731,18 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
         );
       }
 
+      case WS_METHODS.projectsReadTextFile: {
+        const body = stripRequestTag(request.body);
+        return yield* workspaceFileSystem.readTextFile(body).pipe(
+          Effect.mapError(
+            (cause) =>
+              new RouteRequestError({
+                message: `Failed to read workspace file: ${cause.message}`,
+              }),
+          ),
+        );
+      }
+
       case WS_METHODS.projectsWriteFile: {
         const body = stripRequestTag(request.body);
         return yield* workspaceFileSystem.writeFile(body).pipe(

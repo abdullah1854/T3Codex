@@ -97,7 +97,7 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("yoo what&#x27;s ");
   });
 
-  it("renders context compaction entries in the normal work log", async () => {
+  it("renders context compaction entries as a dedicated divider", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
       <MessagesTimeline
@@ -108,15 +108,10 @@ describe("MessagesTimeline", () => {
         scrollContainer={null}
         timelineEntries={[
           {
-            id: "entry-1",
-            kind: "work",
+            id: "compaction:compaction-1",
+            kind: "compaction",
             createdAt: "2026-03-17T19:12:28.000Z",
-            entry: {
-              id: "work-1",
-              createdAt: "2026-03-17T19:12:28.000Z",
-              label: "Context compacted",
-              tone: "info",
-            },
+            summary: "Context compacted",
           },
         ]}
         completionDividerBeforeEntryId={null}
@@ -138,6 +133,5 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain("Context compacted");
-    expect(markup).toContain("Work log");
   });
 });

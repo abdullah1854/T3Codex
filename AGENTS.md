@@ -4,6 +4,7 @@
 
 - All of `bun fmt`, `bun lint`, and `bun typecheck` must pass before considering tasks completed.
 - NEVER run `bun test`. Always use `bun run test` (runs Vitest).
+- For macOS desktop app changes, rebuild and reinstall the local app before considering the task complete when feasible.
 
 ## Project Snapshot
 

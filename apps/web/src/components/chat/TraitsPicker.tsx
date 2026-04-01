@@ -1,6 +1,7 @@
 import {
   type ClaudeModelOptions,
   type CodexModelOptions,
+  type DroidModelOptions,
   type ProviderKind,
   type ProviderModelOptions,
   type ServerProviderModel,
@@ -52,7 +53,11 @@ function getRawEffort(
   if (provider === "codex") {
     return trimOrNull((modelOptions as CodexModelOptions | undefined)?.reasoningEffort);
   }
-  return trimOrNull((modelOptions as ClaudeModelOptions | undefined)?.effort);
+  return trimOrNull(
+    provider === "droid"
+      ? (modelOptions as DroidModelOptions | undefined)?.effort
+      : (modelOptions as ClaudeModelOptions | undefined)?.effort,
+  );
 }
 
 function getRawContextWindow(
@@ -72,6 +77,9 @@ function buildNextOptions(
 ): ProviderOptions {
   if (provider === "codex") {
     return { ...(modelOptions as CodexModelOptions | undefined), ...patch } as CodexModelOptions;
+  }
+  if (provider === "droid") {
+    return { ...(modelOptions as DroidModelOptions | undefined), ...patch } as DroidModelOptions;
   }
   return { ...(modelOptions as ClaudeModelOptions | undefined), ...patch } as ClaudeModelOptions;
 }

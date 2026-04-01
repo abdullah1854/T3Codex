@@ -175,6 +175,16 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         continue;
       }
 
+      if (timelineEntry.kind === "compaction") {
+        nextRows.push({
+          kind: "compaction",
+          id: timelineEntry.id,
+          createdAt: timelineEntry.createdAt,
+          summary: timelineEntry.summary,
+        });
+        continue;
+      }
+
       nextRows.push({
         kind: "message",
         id: timelineEntry.id,
@@ -253,6 +263,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       if (row.kind === "work") return 112;
       if (row.kind === "proposed-plan") return estimateTimelineProposedPlanHeight(row.proposedPlan);
       if (row.kind === "working") return 40;
+      if (row.kind === "compaction") return 36;
       return estimateTimelineMessageHeight(row.message, { timelineWidthPx });
     },
     measureElement: measureVirtualElement,
@@ -540,6 +551,17 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         </div>
       )}
 
+      {row.kind === "compaction" && (
+        <div className="my-2 flex items-center gap-3">
+          <span className="h-px flex-1 bg-amber-400/40" />
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-400/30 bg-amber-50 px-2.5 py-1 text-[10px] uppercase tracking-[0.14em] text-amber-700 dark:bg-amber-950/30 dark:text-amber-400">
+            <ZapIcon className="size-2.5" />
+            {row.summary}
+          </span>
+          <span className="h-px flex-1 bg-amber-400/40" />
+        </div>
+      )}
+
       {row.kind === "working" && (
         <div className="py-0.5 pl-1.5">
           <div className="flex items-center gap-2 pt-1 text-[11px] text-muted-foreground/70">
@@ -628,7 +650,8 @@ type TimelineRow =
       createdAt: string;
       proposedPlan: TimelineProposedPlan;
     }
-  | { kind: "working"; id: string; createdAt: string | null };
+  | { kind: "working"; id: string; createdAt: string | null }
+  | { kind: "compaction"; id: string; createdAt: string; summary: string };
 
 function estimateTimelineProposedPlanHeight(proposedPlan: TimelineProposedPlan): number {
   const estimatedLines = Math.max(1, Math.ceil(proposedPlan.planMarkdown.length / 72));

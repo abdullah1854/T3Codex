@@ -31,6 +31,9 @@ class ClaudeTextGen extends ServiceMap.Service<ClaudeTextGen, TextGenerationShap
   "t3/git/Layers/RoutingTextGeneration/ClaudeTextGen",
 ) {}
 
+const resolveProvider = (provider?: "codex" | "claudeAgent" | "droid"): TextGenerationProvider =>
+  provider === "claudeAgent" ? "claudeAgent" : "codex";
+
 // ---------------------------------------------------------------------------
 // Routing implementation
 // ---------------------------------------------------------------------------
@@ -44,10 +47,13 @@ const makeRoutingTextGeneration = Effect.gen(function* () {
 
   return {
     generateCommitMessage: (input) =>
-      route(input.modelSelection.provider).generateCommitMessage(input),
-    generatePrContent: (input) => route(input.modelSelection.provider).generatePrContent(input),
-    generateBranchName: (input) => route(input.modelSelection.provider).generateBranchName(input),
-    generateThreadTitle: (input) => route(input.modelSelection.provider).generateThreadTitle(input),
+      route(resolveProvider(input.modelSelection.provider)).generateCommitMessage(input),
+    generatePrContent: (input) =>
+      route(resolveProvider(input.modelSelection.provider)).generatePrContent(input),
+    generateBranchName: (input) =>
+      route(resolveProvider(input.modelSelection.provider)).generateBranchName(input),
+    generateThreadTitle: (input) =>
+      route(resolveProvider(input.modelSelection.provider)).generateThreadTitle(input),
   } satisfies TextGenerationShape;
 });
 

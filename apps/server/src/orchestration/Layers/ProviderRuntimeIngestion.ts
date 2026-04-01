@@ -192,6 +192,7 @@ function runtimeEventToActivities(
             ...(requestKind ? { requestKind } : {}),
             requestType: event.payload.requestType,
             ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
+            ...(event.payload.args !== undefined ? { args: event.payload.args } : {}),
           },
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
@@ -444,6 +445,70 @@ function runtimeEventToActivities(
             ...(event.payload.status ? { status: event.payload.status } : {}),
             ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
             ...(event.payload.data !== undefined ? { data: event.payload.data } : {}),
+          },
+          turnId: toTurnId(event.turnId) ?? null,
+          ...maybeSequence,
+        },
+      ];
+    }
+
+    case "hook.started": {
+      return [
+        {
+          id: event.eventId,
+          createdAt: event.createdAt,
+          tone: "info",
+          kind: "hook.started",
+          summary: `Hook: ${event.payload.hookName ?? event.payload.hookEvent ?? "started"}`,
+          payload: {
+            hookId: event.payload.hookId,
+            ...(event.payload.hookName ? { hookName: event.payload.hookName } : {}),
+            ...(event.payload.hookEvent ? { hookEvent: event.payload.hookEvent } : {}),
+          },
+          turnId: toTurnId(event.turnId) ?? null,
+          ...maybeSequence,
+        },
+      ];
+    }
+
+    case "hook.progress": {
+      return [
+        {
+          id: event.eventId,
+          createdAt: event.createdAt,
+          tone: "info",
+          kind: "hook.progress",
+          summary: "Hook output",
+          payload: {
+            hookId: event.payload.hookId,
+            ...(event.payload.output ? { detail: truncateDetail(event.payload.output) } : {}),
+          },
+          turnId: toTurnId(event.turnId) ?? null,
+          ...maybeSequence,
+        },
+      ];
+    }
+
+    case "hook.completed": {
+      return [
+        {
+          id: event.eventId,
+          createdAt: event.createdAt,
+          tone: event.payload.outcome === "error" ? "error" : "info",
+          kind: "hook.completed",
+          summary:
+            event.payload.outcome === "error"
+              ? "Hook failed"
+              : event.payload.outcome === "cancelled"
+                ? "Hook cancelled"
+                : "Hook completed",
+          payload: {
+            hookId: event.payload.hookId,
+            outcome: event.payload.outcome,
+            ...(event.payload.output ? { detail: truncateDetail(event.payload.output) } : {}),
+            ...(typeof event.payload.exitCode === "number"
+              ? { exitCode: event.payload.exitCode }
+              : {}),
           },
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,

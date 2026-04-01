@@ -8,11 +8,14 @@ import { memo } from "react";
 import GitActionsControl from "../GitActionsControl";
 import { DiffIcon, TerminalSquareIcon } from "lucide-react";
 import { Badge } from "../ui/badge";
+import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import ProjectScriptsControl, { type NewProjectScriptInput } from "../ProjectScriptsControl";
 import { Toggle } from "../ui/toggle";
 import { SidebarTrigger } from "../ui/sidebar";
 import { OpenInPicker } from "./OpenInPicker";
+import { WorkspaceCodexControl } from "./WorkspaceCodexControl";
+import type { WorkspaceCodexSummary } from "~/workspaceCodex";
 
 interface ChatHeaderProps {
   activeThreadId: ThreadId;
@@ -30,10 +33,19 @@ interface ChatHeaderProps {
   diffToggleShortcutLabel: string | null;
   gitCwd: string | null;
   diffOpen: boolean;
+  workspaceCodexSummary: WorkspaceCodexSummary | null;
+  onOpenDoctor: () => void;
+  onOpenHandoff: () => void;
+  onCreateCodexAgent: () => void;
+  onCreateCodexAgentsMd: () => void;
+  onCreateCodexConfigToml: () => void;
+  onCreateCodexSkill: () => void;
+  onOpenCodexPath: (relativePath: string) => void;
   onRunProjectScript: (script: ProjectScript) => void;
   onAddProjectScript: (input: NewProjectScriptInput) => Promise<void>;
   onUpdateProjectScript: (scriptId: string, input: NewProjectScriptInput) => Promise<void>;
   onDeleteProjectScript: (scriptId: string) => Promise<void>;
+  onOpenWorkspace: () => void;
   onToggleTerminal: () => void;
   onToggleDiff: () => void;
 }
@@ -54,10 +66,19 @@ export const ChatHeader = memo(function ChatHeader({
   diffToggleShortcutLabel,
   gitCwd,
   diffOpen,
+  workspaceCodexSummary,
+  onOpenDoctor,
+  onOpenHandoff,
+  onCreateCodexAgent,
+  onCreateCodexAgentsMd,
+  onCreateCodexConfigToml,
+  onCreateCodexSkill,
+  onOpenCodexPath,
   onRunProjectScript,
   onAddProjectScript,
   onUpdateProjectScript,
   onDeleteProjectScript,
+  onOpenWorkspace,
   onToggleTerminal,
   onToggleDiff,
 }: ChatHeaderProps) {
@@ -101,6 +122,23 @@ export const ChatHeader = memo(function ChatHeader({
             openInCwd={openInCwd}
           />
         )}
+        {activeProjectName ? (
+          <WorkspaceCodexControl
+            summary={workspaceCodexSummary}
+            onCreateAgent={onCreateCodexAgent}
+            onCreateAgentsMd={onCreateCodexAgentsMd}
+            onCreateConfigToml={onCreateCodexConfigToml}
+            onCreateSkill={onCreateCodexSkill}
+            onOpenPath={onOpenCodexPath}
+            onOpenWorkspace={onOpenWorkspace}
+          />
+        ) : null}
+        <Button variant="outline" size="xs" onClick={onOpenDoctor}>
+          Doctor
+        </Button>
+        <Button variant="outline" size="xs" onClick={onOpenHandoff}>
+          Handoff
+        </Button>
         {activeProjectName && <GitActionsControl gitCwd={gitCwd} activeThreadId={activeThreadId} />}
         <Tooltip>
           <TooltipTrigger

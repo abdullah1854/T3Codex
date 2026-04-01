@@ -29,7 +29,11 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useDebouncedValue } from "@tanstack/react-pacer";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { gitBranchesQueryOptions, gitCreateWorktreeMutationOptions } from "~/lib/gitReactQuery";
-import { projectSearchEntriesQueryOptions } from "~/lib/projectReactQuery";
+import {
+  projectQueryKeys,
+  projectReadTextFileQueryOptions,
+  projectSearchEntriesQueryOptions,
+} from "~/lib/projectReactQuery";
 import { serverConfigQueryOptions, serverQueryKeys } from "~/lib/serverReactQuery";
 import { isElectron } from "../env";
 import { parseDiffRouteSearch, stripDiffSearchParams } from "../diffRouteSearch";
@@ -89,6 +93,7 @@ import { LRUCache } from "../lib/lruCache";
 import { basenameOfPath } from "../vscode-icons";
 import { useTheme } from "../hooks/useTheme";
 import { useTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
+import { openInPreferredEditor } from "../editorPreferences";
 import BranchToolbar from "./BranchToolbar";
 import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
 import PlanSidebar from "./PlanSidebar";
@@ -105,6 +110,8 @@ import {
   XIcon,
 } from "lucide-react";
 import { Button } from "./ui/button";
+import { Badge } from "./ui/badge";
+import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
 import { Separator } from "./ui/separator";
 import { cn, randomUUID } from "~/lib/utils";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
@@ -128,7 +135,7 @@ import {
   resolveSelectableProvider,
 } from "../providerModels";
 import { useSettings } from "../hooks/useSettings";
-import { resolveAppModelSelection } from "../modelSelection";
+import { buildModelSelection, resolveAppModelSelection } from "../modelSelection";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import {
   type ComposerImageAttachment,
@@ -146,7 +153,7 @@ import {
   type TerminalContextDraft,
   type TerminalContextSelection,
 } from "../lib/terminalContext";
-import { deriveLatestContextWindowSnapshot } from "../lib/contextWindow";
+import { deriveLatestContextWindowSnapshot, formatContextWindowTokens } from "../lib/contextWindow";
 import {
   resolveComposerFooterContentWidth,
   shouldForceCompactComposerFooterForFit,
@@ -156,6 +163,7 @@ import {
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
 import { ComposerPromptEditor, type ComposerPromptEditorHandle } from "./ComposerPromptEditor";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
+import { DoctorDialog } from "./chat/DoctorDialog";
 import { MessagesTimeline } from "./chat/MessagesTimeline";
 import { ChatHeader } from "./chat/ChatHeader";
 import { ContextWindowMeter } from "./chat/ContextWindowMeter";
@@ -168,6 +176,7 @@ import { ComposerPrimaryActions } from "./chat/ComposerPrimaryActions";
 import { ComposerPendingApprovalPanel } from "./chat/ComposerPendingApprovalPanel";
 import { ComposerPendingUserInputPanel } from "./chat/ComposerPendingUserInputPanel";
 import { ComposerPlanFollowUpBanner } from "./chat/ComposerPlanFollowUpBanner";
+import { HandoffDialog } from "./chat/HandoffDialog";
 import {
   getComposerProviderState,
   renderProviderTraitsMenuContent,
@@ -175,6 +184,22 @@ import {
 } from "./chat/composerProviderRegistry";
 import { ProviderStatusBanner } from "./chat/ProviderStatusBanner";
 import { ThreadErrorBanner } from "./chat/ThreadErrorBanner";
+import { WorkProfilePanel } from "./chat/WorkProfilePanel";
+import {
+  formatWorkProfilePrompt,
+  getWorkProfileDefinition,
+  getWorkProfileProvider,
+  hasWorkProfilePreflightValues,
+  resolveWorkProfileId,
+  resolveWorkProfilePreflight,
+} from "../workProfiles";
+import {
+  deriveWorkspaceCodexSummary,
+  findBestWorkspaceCodexProfileMatch,
+  resolveWorkspaceCodexProfile,
+  scaffoldWorkspaceCodexFile,
+  type WorkspaceCodexScaffoldTarget,
+} from "../workspaceCodex";
 import {
   buildExpiredTerminalContextToastCopy,
   buildLocalDraftThread,
@@ -195,6 +220,7 @@ import {
   waitForStartedServerThread,
 } from "./ChatView.logic";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
+import { resolveProjectSpecialization } from "../projectSpecializations";
 
 const ATTACHMENT_PREVIEW_HANDOFF_TTL_MS = 5000;
 const IMAGE_SIZE_LIMIT_LABEL = `${Math.round(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES / (1024 * 1024))}MB`;
@@ -208,6 +234,36 @@ const EMPTY_PROVIDERS: ServerProvider[] = [];
 const EMPTY_PENDING_USER_INPUT_ANSWERS: Record<string, PendingUserInputDraftAnswer> = {};
 
 type ThreadPlanCatalogEntry = Pick<Thread, "id" | "proposedPlans">;
+
+function joinProjectRelativePath(cwd: string, relativePath: string): string {
+  return cwd.endsWith("/") ? `${cwd}${relativePath}` : `${cwd}/${relativePath}`;
+}
+
+function formatWorkspaceWebSearchInstruction(mode: "cached" | "disabled" | "live"): string {
+  switch (mode) {
+    case "disabled":
+      return "Avoid web search unless the task explicitly requires it.";
+    case "live":
+      return "Prefer live web search when current information matters.";
+    case "cached":
+      return "Prefer cached web search unless the task needs live verification.";
+  }
+}
+
+function matchesWorkspaceDefaultModelSelection(
+  draftSelection: ModelSelection | undefined,
+  workspaceSelection: ModelSelection | null,
+): boolean {
+  if (!draftSelection || !workspaceSelection) {
+    return false;
+  }
+  return (
+    draftSelection.provider === workspaceSelection.provider &&
+    draftSelection.model === workspaceSelection.model &&
+    JSON.stringify(draftSelection.options ?? null) ===
+      JSON.stringify(workspaceSelection.options ?? null)
+  );
+}
 
 const MAX_THREAD_PLAN_CATALOG_CACHE_ENTRIES = 500;
 const MAX_THREAD_PLAN_CATALOG_CACHE_MEMORY_BYTES = 512 * 1024;
@@ -445,6 +501,18 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const setComposerDraftInteractionMode = useComposerDraftStore(
     (store) => store.setInteractionMode,
   );
+  const clearComposerDraftProviderSelection = useComposerDraftStore(
+    (store) => store.clearProviderSelection,
+  );
+  const setComposerDraftWorkProfile = useComposerDraftStore((store) => store.setWorkProfile);
+  const setComposerDraftSuppressWorkspaceDefaults = useComposerDraftStore(
+    (store) => store.setSuppressWorkspaceDefaults,
+  );
+  const setComposerDraftWorkspaceCodexProfileName = useComposerDraftStore(
+    (store) => store.setWorkspaceCodexProfileName,
+  );
+  const setComposerDraftPreflightValue = useComposerDraftStore((store) => store.setPreflightValue);
+  const clearComposerDraftPreflight = useComposerDraftStore((store) => store.clearPreflight);
   const addComposerDraftImage = useComposerDraftStore((store) => store.addImage);
   const addComposerDraftImages = useComposerDraftStore((store) => store.addImages);
   const removeComposerDraftImage = useComposerDraftStore((store) => store.removeImage);
@@ -503,6 +571,9 @@ export default function ChatView({ threadId }: ChatViewProps) {
     useState<Record<string, number>>({});
   const [expandedWorkGroups, setExpandedWorkGroups] = useState<Record<string, boolean>>({});
   const [planSidebarOpen, setPlanSidebarOpen] = useState(false);
+  const [workProfilePanelOpen, setWorkProfilePanelOpen] = useState(false);
+  const [doctorDialogOpen, setDoctorDialogOpen] = useState(false);
+  const [handoffDialogOpen, setHandoffDialogOpen] = useState(false);
   const [isComposerFooterCompact, setIsComposerFooterCompact] = useState(false);
   const [isComposerPrimaryActionsCompact, setIsComposerPrimaryActionsCompact] = useState(false);
   // Tracks whether the user explicitly dismissed the sidebar for the active turn.
@@ -646,10 +717,33 @@ export default function ChatView({ threadId }: ChatViewProps) {
     [draftThread, fallbackDraftProject?.defaultModelSelection, localDraftError, threadId],
   );
   const activeThread = serverThread ?? localDraftThread;
+  const activeProject = useProjectById(activeThread?.projectId);
+  const projectSpecialization = resolveProjectSpecialization({
+    cwd: activeProject?.cwd,
+    projectName: activeProject?.name,
+  });
+  const resolvedWorkProfileId = resolveWorkProfileId(
+    composerDraft.workProfileId,
+    projectSpecialization?.recommendedWorkProfileId ?? settings.defaultWorkProfileId,
+  );
+  const activeWorkProfile = getWorkProfileDefinition(resolvedWorkProfileId);
+  const resolvedWorkProfilePreflight = {
+    ...resolveWorkProfilePreflight(activeWorkProfile, {}),
+    ...projectSpecialization?.preflight,
+    ...composerDraft.preflight,
+  };
+  const draftHasCustomPreflight = hasWorkProfilePreflightValues(composerDraft.preflight);
+  const workProfileHasPreflight = hasWorkProfilePreflightValues(resolvedWorkProfilePreflight);
   const runtimeMode =
-    composerDraft.runtimeMode ?? activeThread?.runtimeMode ?? DEFAULT_RUNTIME_MODE;
+    composerDraft.runtimeMode ??
+    activeThread?.runtimeMode ??
+    activeWorkProfile.defaults.runtimeMode ??
+    DEFAULT_RUNTIME_MODE;
   const interactionMode =
-    composerDraft.interactionMode ?? activeThread?.interactionMode ?? DEFAULT_INTERACTION_MODE;
+    composerDraft.interactionMode ??
+    activeThread?.interactionMode ??
+    activeWorkProfile.defaults.interactionMode ??
+    DEFAULT_INTERACTION_MODE;
   const isServerThread = serverThread !== undefined;
   const isLocalDraftThread = !isServerThread && localDraftThread !== undefined;
   const canCheckoutPullRequestIntoThread = isLocalDraftThread;
@@ -674,7 +768,202 @@ export default function ChatView({ threadId }: ChatViewProps) {
     [activeThread?.activities],
   );
   const latestTurnSettled = isLatestTurnSettled(activeLatestTurn, activeThread?.session ?? null);
-  const activeProject = useProjectById(activeThread?.projectId);
+  const workspaceCodexEntriesQuery = useQuery(
+    projectSearchEntriesQueryOptions({
+      cwd: activeProject?.cwd ?? null,
+      query: ".codex",
+      enabled: Boolean(activeProject?.cwd),
+      limit: 200,
+    }),
+  );
+  const workspaceAgentsDocQuery = useQuery(
+    projectSearchEntriesQueryOptions({
+      cwd: activeProject?.cwd ?? null,
+      query: "AGENTS.md",
+      enabled: Boolean(activeProject?.cwd),
+      limit: 40,
+    }),
+  );
+  const workspaceHasConfigToml = Boolean(
+    workspaceCodexEntriesQuery.data?.entries.some((entry) => entry.path === ".codex/config.toml"),
+  );
+  const workspaceHasAgentsMd = Boolean(
+    workspaceAgentsDocQuery.data?.entries.some((entry) => entry.path === "AGENTS.md"),
+  );
+  const workspaceCodexConfigQuery = useQuery(
+    projectReadTextFileQueryOptions({
+      cwd: activeProject?.cwd ?? null,
+      relativePath: ".codex/config.toml",
+      enabled: Boolean(activeProject?.cwd) && workspaceHasConfigToml,
+    }),
+  );
+  const workspaceAgentsMdQuery = useQuery(
+    projectReadTextFileQueryOptions({
+      cwd: activeProject?.cwd ?? null,
+      relativePath: "AGENTS.md",
+      enabled: Boolean(activeProject?.cwd) && workspaceHasAgentsMd,
+    }),
+  );
+  const workspaceCodexSummary = useMemo(() => {
+    if (!activeProject?.cwd) {
+      return null;
+    }
+    const summary = deriveWorkspaceCodexSummary({
+      codexEntries: workspaceCodexEntriesQuery.data?.entries ?? [],
+      agentsDocEntries: workspaceAgentsDocQuery.data?.entries ?? [],
+      configContents: workspaceCodexConfigQuery.data?.contents ?? null,
+      agentsContents: workspaceAgentsMdQuery.data?.contents ?? null,
+    });
+    if (
+      !summary.hasAgentsMd &&
+      !summary.hasConfigToml &&
+      summary.profiles.length === 0 &&
+      summary.skills.length === 0 &&
+      summary.agents.length === 0 &&
+      summary.workspaceDefaults === null
+    ) {
+      return null;
+    }
+    return summary;
+  }, [
+    activeProject?.cwd,
+    workspaceAgentsDocQuery.data?.entries,
+    workspaceAgentsMdQuery.data?.contents,
+    workspaceCodexConfigQuery.data?.contents,
+    workspaceCodexEntriesQuery.data?.entries,
+  ]);
+  const selectedWorkspaceCodexProfile = resolveWorkspaceCodexProfile(
+    workspaceCodexSummary,
+    composerDraft.workspaceCodexProfileName,
+  );
+  const suggestedWorkspaceCodexProfile = findBestWorkspaceCodexProfileMatch(
+    workspaceCodexSummary,
+    activeWorkProfile,
+  );
+  const rawWorkspaceCodexDefaults =
+    selectedWorkspaceCodexProfile?.defaults ?? workspaceCodexSummary?.workspaceDefaults ?? null;
+  const workspaceDefaultsSuppressed = composerDraft.suppressWorkspaceDefaults;
+  const workspaceCodexDefaults = workspaceDefaultsSuppressed ? null : rawWorkspaceCodexDefaults;
+  const workspaceDefaultsAvailable = isLocalDraftThread && rawWorkspaceCodexDefaults !== null;
+  const openProjectPathInPreferredEditor = useCallback((targetPath: string) => {
+    const api = readNativeApi();
+    if (!api) {
+      return;
+    }
+    void openInPreferredEditor(api, targetPath);
+  }, []);
+  const createWorkspaceCodexSurface = useCallback(
+    async (target: WorkspaceCodexScaffoldTarget) => {
+      const api = readNativeApi();
+      if (!api || !activeProject?.cwd) {
+        toastManager.add({
+          type: "error",
+          title: "Workspace file actions are unavailable.",
+        });
+        return;
+      }
+
+      const scaffold = scaffoldWorkspaceCodexFile(target);
+
+      try {
+        await api.projects.writeFile({
+          cwd: activeProject.cwd,
+          relativePath: scaffold.relativePath,
+          contents: scaffold.contents,
+        });
+        await queryClient.invalidateQueries({ queryKey: projectQueryKeys.all });
+        openProjectPathInPreferredEditor(
+          joinProjectRelativePath(activeProject.cwd, scaffold.relativePath),
+        );
+      } catch (error) {
+        toastManager.add({
+          type: "error",
+          title: `Failed to create ${scaffold.label}.`,
+          description: error instanceof Error ? error.message : "An error occurred.",
+        });
+      }
+    },
+    [activeProject?.cwd, openProjectPathInPreferredEditor, queryClient],
+  );
+  const toggleWorkspaceDefaultsForDraft = useCallback(() => {
+    if (!workspaceDefaultsAvailable) {
+      return;
+    }
+
+    const nextSuppressed = !workspaceDefaultsSuppressed;
+    setComposerDraftSuppressWorkspaceDefaults(threadId, nextSuppressed);
+
+    if (!nextSuppressed || !rawWorkspaceCodexDefaults) {
+      return;
+    }
+
+    if (composerDraft.runtimeMode === rawWorkspaceCodexDefaults.runtimeMode) {
+      setComposerDraftRuntimeMode(threadId, null);
+    }
+
+    if (
+      matchesWorkspaceDefaultModelSelection(
+        composerDraft.modelSelectionByProvider.codex,
+        rawWorkspaceCodexDefaults.modelSelection,
+      )
+    ) {
+      clearComposerDraftProviderSelection(threadId, "codex");
+    }
+  }, [
+    clearComposerDraftProviderSelection,
+    composerDraft.modelSelectionByProvider.codex,
+    composerDraft.runtimeMode,
+    rawWorkspaceCodexDefaults,
+    setComposerDraftRuntimeMode,
+    setComposerDraftSuppressWorkspaceDefaults,
+    threadId,
+    workspaceDefaultsAvailable,
+    workspaceDefaultsSuppressed,
+  ]);
+  const setWorkspaceCodexProfileForDraft = useCallback(
+    (profileName: string | null) => {
+      const nextProfile = resolveWorkspaceCodexProfile(workspaceCodexSummary, profileName);
+      const nextDefaults =
+        nextProfile?.defaults ?? workspaceCodexSummary?.workspaceDefaults ?? null;
+      const previousDefaults = rawWorkspaceCodexDefaults;
+
+      setComposerDraftWorkspaceCodexProfileName(threadId, profileName);
+      setComposerDraftSuppressWorkspaceDefaults(threadId, false);
+
+      if (
+        composerDraft.runtimeMode === null ||
+        composerDraft.runtimeMode === previousDefaults?.runtimeMode
+      ) {
+        setComposerDraftRuntimeMode(threadId, nextDefaults?.runtimeMode ?? null);
+      }
+
+      if (
+        composerDraft.modelSelectionByProvider.codex === undefined ||
+        matchesWorkspaceDefaultModelSelection(
+          composerDraft.modelSelectionByProvider.codex,
+          previousDefaults?.modelSelection ?? null,
+        )
+      ) {
+        if (nextDefaults?.modelSelection) {
+          setComposerDraftModelSelection(threadId, nextDefaults.modelSelection);
+        } else {
+          clearComposerDraftProviderSelection(threadId, "codex");
+        }
+      }
+    },
+    [
+      clearComposerDraftProviderSelection,
+      composerDraft.modelSelectionByProvider.codex,
+      composerDraft.runtimeMode,
+      rawWorkspaceCodexDefaults,
+      setComposerDraftModelSelection,
+      setComposerDraftRuntimeMode,
+      setComposerDraftSuppressWorkspaceDefaults,
+      setComposerDraftWorkspaceCodexProfileName,
+      threadId,
+      workspaceCodexSummary,
+    ],
+  );
 
   const openPullRequestDialog = useCallback(
     (reference?: string) => {
@@ -790,6 +1079,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const selectedProviderByThreadId = composerDraft.activeProvider ?? null;
   const threadProvider =
     activeThread?.modelSelection.provider ?? activeProject?.defaultModelSelection?.provider ?? null;
+  const profileProvider = getWorkProfileProvider(activeWorkProfile);
   const hasThreadStarted = threadHasStarted(activeThread);
   const lockedProvider: ProviderKind | null = hasThreadStarted
     ? (sessionProvider ?? threadProvider ?? selectedProviderByThreadId ?? null)
@@ -798,7 +1088,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const providerStatuses = serverConfigQuery.data?.providers ?? EMPTY_PROVIDERS;
   const unlockedSelectedProvider = resolveSelectableProvider(
     providerStatuses,
-    selectedProviderByThreadId ?? threadProvider ?? "codex",
+    selectedProviderByThreadId ?? profileProvider ?? threadProvider ?? "codex",
   );
   const selectedProvider: ProviderKind = lockedProvider ?? unlockedSelectedProvider;
   const { modelOptions: composerModelOptions, selectedModel } = useEffectiveComposerModelState({
@@ -823,14 +1113,66 @@ export default function ChatView({ threadId }: ChatViewProps) {
   );
   const selectedPromptEffort = composerProviderState.promptEffort;
   const selectedModelOptionsForDispatch = composerProviderState.modelOptionsForDispatch;
-  const selectedModelSelection = useMemo<ModelSelection>(
-    () => ({
-      provider: selectedProvider,
-      model: selectedModel,
-      ...(selectedModelOptionsForDispatch ? { options: selectedModelOptionsForDispatch } : {}),
-    }),
-    [selectedModel, selectedModelOptionsForDispatch, selectedProvider],
+  const workspacePlanReasoningEffort =
+    selectedProvider === "codex" &&
+    interactionMode === "plan" &&
+    workspaceCodexDefaults?.planModeReasoningEffort &&
+    composerModelOptions?.codex?.reasoningEffort === undefined
+      ? workspaceCodexDefaults.planModeReasoningEffort
+      : null;
+  const effectiveSelectedPromptEffort = workspacePlanReasoningEffort ?? selectedPromptEffort;
+  const effectiveSelectedModelOptionsForDispatch = useMemo(
+    () =>
+      selectedProvider === "codex" && workspacePlanReasoningEffort
+        ? {
+            ...selectedModelOptionsForDispatch,
+            reasoningEffort: workspacePlanReasoningEffort,
+          }
+        : selectedModelOptionsForDispatch,
+    [selectedModelOptionsForDispatch, selectedProvider, workspacePlanReasoningEffort],
   );
+  const selectedModelSelection = useMemo<ModelSelection>(
+    () =>
+      buildModelSelection(
+        selectedProvider,
+        selectedModel,
+        effectiveSelectedModelOptionsForDispatch,
+      ),
+    [effectiveSelectedModelOptionsForDispatch, selectedModel, selectedProvider],
+  );
+  const workspaceDefaultStatusItems = useMemo(() => {
+    if (!workspaceDefaultsAvailable || !workspaceCodexDefaults) {
+      return [];
+    }
+
+    const items: string[] = [];
+    if (selectedWorkspaceCodexProfile) {
+      items.push(`profile ${selectedWorkspaceCodexProfile.name}`);
+    }
+    if (workspaceCodexDefaults.modelSelection) {
+      items.push(`model ${workspaceCodexDefaults.modelSelection.model}`);
+    }
+    if (workspaceCodexDefaults.reasoningEffort) {
+      items.push(`${workspaceCodexDefaults.reasoningEffort} reasoning`);
+    }
+    if (workspaceCodexDefaults.runtimeMode === "full-access") {
+      items.push("full access");
+    } else if (workspaceCodexDefaults.runtimeMode === "approval-required") {
+      items.push("approval required");
+    }
+    if (workspacePlanReasoningEffort) {
+      items.push(`plan ${workspacePlanReasoningEffort}`);
+    }
+    if (workspaceCodexDefaults.webSearchMode) {
+      items.push(`web ${workspaceCodexDefaults.webSearchMode}`);
+    }
+    return items;
+  }, [
+    selectedWorkspaceCodexProfile,
+    workspaceCodexDefaults,
+    workspaceDefaultsAvailable,
+    workspacePlanReasoningEffort,
+  ]);
   const selectedModelForPicker = selectedModel;
   const phase = derivePhase(activeThread?.session ?? null);
   const threadActivities = activeThread?.activities ?? EMPTY_ACTIVITIES;
@@ -1121,8 +1463,13 @@ export default function ChatView({ threadId }: ChatViewProps) {
   }, [serverMessages, attachmentPreviewHandoffByMessageId, optimisticUserMessages]);
   const timelineEntries = useMemo(
     () =>
-      deriveTimelineEntries(timelineMessages, activeThread?.proposedPlans ?? [], workLogEntries),
-    [activeThread?.proposedPlans, timelineMessages, workLogEntries],
+      deriveTimelineEntries(
+        timelineMessages,
+        activeThread?.proposedPlans ?? [],
+        workLogEntries,
+        activeThread?.activities,
+      ),
+    [activeThread?.activities, activeThread?.proposedPlans, timelineMessages, workLogEntries],
   );
   const { turnDiffSummaries, inferredCheckpointTurnCountByTurnId } =
     useTurnDiffSummaries(activeThread);
@@ -1174,8 +1521,17 @@ export default function ChatView({ threadId }: ChatViewProps) {
     if (!latestTurnHasToolActivity) return null;
 
     const elapsed = formatElapsed(activeLatestTurn.startedAt, activeLatestTurn.completedAt);
-    return elapsed ? `Worked for ${elapsed}` : null;
+    const tokenCost =
+      activeContextWindow?.lastUsedTokens && activeContextWindow.lastUsedTokens > 0
+        ? formatContextWindowTokens(activeContextWindow.lastUsedTokens)
+        : null;
+    const parts = [
+      elapsed ? `Worked for ${elapsed}` : null,
+      tokenCost ? `${tokenCost} tokens` : null,
+    ].filter(Boolean);
+    return parts.length > 0 ? parts.join(" · ") : null;
   }, [
+    activeContextWindow?.lastUsedTokens,
     activeLatestTurn?.completedAt,
     activeLatestTurn?.startedAt,
     latestTurnHasToolActivity,
@@ -1209,6 +1565,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
       codex: providerStatuses.find((provider) => provider.provider === "codex")?.models ?? [],
       claudeAgent:
         providerStatuses.find((provider) => provider.provider === "claudeAgent")?.models ?? [],
+      droid: providerStatuses.find((provider) => provider.provider === "droid")?.models ?? [],
     }),
     [providerStatuses],
   );
@@ -2362,8 +2719,52 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const envMode: DraftThreadEnvMode = activeWorktreePath
     ? "worktree"
     : isLocalDraftThread
-      ? (draftThread?.envMode ?? "local")
+      ? (draftThread?.envMode ??
+        activeWorkProfile.defaults.envMode ??
+        settings.defaultThreadEnvMode)
       : "local";
+
+  useEffect(() => {
+    if (activeWorkProfile.id !== "general" || workProfileHasPreflight) {
+      setWorkProfilePanelOpen(true);
+    }
+  }, [activeWorkProfile.id, workProfileHasPreflight]);
+
+  useEffect(() => {
+    if (!isLocalDraftThread || !workspaceCodexDefaults) {
+      return;
+    }
+    if (
+      prompt.trim().length > 0 ||
+      composerImages.length > 0 ||
+      composerTerminalContexts.length > 0 ||
+      composerDraft.workProfileId !== null ||
+      draftHasCustomPreflight
+    ) {
+      return;
+    }
+
+    if (!composerDraft.runtimeMode && workspaceCodexDefaults.runtimeMode) {
+      setComposerDraftRuntimeMode(threadId, workspaceCodexDefaults.runtimeMode);
+    }
+
+    if (!composerDraft.modelSelectionByProvider.codex && workspaceCodexDefaults.modelSelection) {
+      setComposerDraftModelSelection(threadId, workspaceCodexDefaults.modelSelection);
+    }
+  }, [
+    composerDraft.modelSelectionByProvider.codex,
+    composerDraft.runtimeMode,
+    composerDraft.workProfileId,
+    composerImages.length,
+    composerTerminalContexts.length,
+    draftHasCustomPreflight,
+    isLocalDraftThread,
+    prompt,
+    setComposerDraftModelSelection,
+    setComposerDraftRuntimeMode,
+    threadId,
+    workspaceCodexDefaults,
+  ]);
 
   useEffect(() => {
     if (phase !== "running") return;
@@ -2722,12 +3123,27 @@ export default function ChatView({ threadId }: ChatViewProps) {
     );
     const messageIdForSend = newMessageId();
     const messageCreatedAt = new Date().toISOString();
+    const effectivePromptText =
+      (activeWorkProfile.id !== "general" || workProfileHasPreflight) && isFirstMessage
+        ? formatWorkProfilePrompt({
+            includeProfileHeader: activeWorkProfile.id !== "general",
+            preflight: resolvedWorkProfilePreflight,
+            profile: activeWorkProfile,
+            prompt: messageTextForSend || IMAGE_ONLY_BOOTSTRAP_PROMPT,
+          })
+        : messageTextForSend || IMAGE_ONLY_BOOTSTRAP_PROMPT;
+    const workspaceDefaultsPromptPrefix =
+      isFirstMessage && workspaceCodexDefaults?.webSearchMode
+        ? `Workspace defaults:\n- Web search: ${formatWorkspaceWebSearchInstruction(
+            workspaceCodexDefaults.webSearchMode,
+          )}\n\n`
+        : "";
     const outgoingMessageText = formatOutgoingPrompt({
       provider: selectedProvider,
       model: selectedModel,
       models: selectedProviderModels,
-      effort: selectedPromptEffort,
-      text: messageTextForSend || IMAGE_ONLY_BOOTSTRAP_PROMPT,
+      effort: effectiveSelectedPromptEffort,
+      text: `${workspaceDefaultsPromptPrefix}${effectivePromptText}`,
     });
     const turnAttachmentsPromise = Promise.all(
       composerImagesSnapshot.map(async (image) => ({
@@ -2827,14 +3243,13 @@ export default function ChatView({ threadId }: ChatViewProps) {
         }
       }
       const title = truncate(titleSeed);
-      const threadCreateModelSelection: ModelSelection = {
-        provider: selectedProvider,
-        model:
-          selectedModel ||
+      const threadCreateModelSelection: ModelSelection = buildModelSelection(
+        selectedProvider,
+        selectedModel ||
           activeProject.defaultModelSelection?.model ||
           DEFAULT_MODEL_BY_PROVIDER.codex,
-        ...(selectedModelSelection.options ? { options: selectedModelSelection.options } : {}),
-      };
+        selectedModelSelection.options,
+      );
 
       if (isLocalDraftThread) {
         await api.orchestration.dispatchCommand({
@@ -3149,7 +3564,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
         provider: selectedProvider,
         model: selectedModel,
         models: selectedProviderModels,
-        effort: selectedPromptEffort,
+        effort: effectiveSelectedPromptEffort,
         text: trimmed,
       });
 
@@ -3237,7 +3652,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
       persistThreadSettingsForNextTurn,
       resetLocalDispatch,
       runtimeMode,
-      selectedPromptEffort,
+      effectiveSelectedPromptEffort,
       selectedModelSelection,
       selectedProvider,
       selectedProviderModels,
@@ -3270,7 +3685,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
       provider: selectedProvider,
       model: selectedModel,
       models: selectedProviderModels,
-      effort: selectedPromptEffort,
+      effort: effectiveSelectedPromptEffort,
       text: implementationPrompt,
     });
     const nextThreadTitle = truncate(buildPlanImplementationThreadTitle(planMarkdown));
@@ -3353,7 +3768,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
     navigate,
     resetLocalDispatch,
     runtimeMode,
-    selectedPromptEffort,
+    effectiveSelectedPromptEffort,
     selectedModelSelection,
     selectedProvider,
     selectedProviderModels,
@@ -3773,12 +4188,45 @@ export default function ChatView({ threadId }: ChatViewProps) {
           diffToggleShortcutLabel={diffPanelShortcutLabel}
           gitCwd={gitCwd}
           diffOpen={diffOpen}
+          workspaceCodexSummary={workspaceCodexSummary}
+          onOpenDoctor={() => {
+            setDoctorDialogOpen(true);
+          }}
+          onOpenHandoff={() => {
+            setHandoffDialogOpen(true);
+          }}
+          onCreateCodexAgent={() => {
+            void createWorkspaceCodexSurface("agent");
+          }}
+          onCreateCodexAgentsMd={() => {
+            void createWorkspaceCodexSurface("agents-doc");
+          }}
+          onCreateCodexConfigToml={() => {
+            void createWorkspaceCodexSurface("config");
+          }}
+          onCreateCodexSkill={() => {
+            void createWorkspaceCodexSurface("skill");
+          }}
+          onOpenCodexPath={(relativePath) => {
+            if (!activeProject?.cwd) {
+              return;
+            }
+            openProjectPathInPreferredEditor(
+              joinProjectRelativePath(activeProject.cwd, relativePath),
+            );
+          }}
           onRunProjectScript={(script) => {
             void runProjectScript(script);
           }}
           onAddProjectScript={saveProjectScript}
           onUpdateProjectScript={updateProjectScript}
           onDeleteProjectScript={deleteProjectScript}
+          onOpenWorkspace={() => {
+            if (!activeProject?.cwd) {
+              return;
+            }
+            openProjectPathInPreferredEditor(activeProject.cwd);
+          }}
           onToggleTerminal={toggleTerminalVisibility}
           onToggleDiff={onToggleDiff}
         />
@@ -3992,6 +4440,48 @@ export default function ChatView({ threadId }: ChatViewProps) {
                           ))}
                         </div>
                       )}
+                    {!isComposerApprovalState && pendingUserInputs.length === 0 ? (
+                      <WorkProfilePanel
+                        disabled={isConnecting}
+                        expanded={workProfilePanelOpen}
+                        profile={activeWorkProfile}
+                        preflight={resolvedWorkProfilePreflight}
+                        projectSpecialization={projectSpecialization}
+                        selectedWorkspaceCodexProfile={selectedWorkspaceCodexProfile}
+                        suggestedWorkspaceCodexProfile={suggestedWorkspaceCodexProfile}
+                        workspaceCodexSummary={workspaceCodexSummary}
+                        onToggleExpanded={() => setWorkProfilePanelOpen((current) => !current)}
+                        onProfileChange={(nextProfileId) => {
+                          const nextProfile = getWorkProfileDefinition(nextProfileId);
+                          setComposerDraftWorkProfile(threadId, nextProfileId);
+                          clearComposerDraftPreflight(threadId);
+                          setComposerDraftRuntimeMode(
+                            threadId,
+                            nextProfile.defaults.runtimeMode ?? null,
+                          );
+                          setComposerDraftInteractionMode(
+                            threadId,
+                            nextProfile.defaults.interactionMode ?? null,
+                          );
+                          if (nextProfile.defaults.modelSelection) {
+                            setComposerDraftModelSelection(
+                              threadId,
+                              nextProfile.defaults.modelSelection,
+                            );
+                          }
+                          if (isLocalDraftThread) {
+                            setDraftThreadContext(threadId, {
+                              envMode:
+                                nextProfile.defaults.envMode ?? settings.defaultThreadEnvMode,
+                            });
+                          }
+                        }}
+                        onWorkspaceCodexProfileChange={setWorkspaceCodexProfileForDraft}
+                        onPreflightChange={(field, value) =>
+                          setComposerDraftPreflightValue(threadId, field, value)
+                        }
+                      />
+                    ) : null}
                     <ComposerPromptEditor
                       ref={composerEditorRef}
                       value={
@@ -4193,6 +4683,68 @@ export default function ChatView({ threadId }: ChatViewProps) {
                         {activeContextWindow ? (
                           <ContextWindowMeter usage={activeContextWindow} />
                         ) : null}
+                        {workspaceDefaultsAvailable ? (
+                          <Popover>
+                            <PopoverTrigger
+                              render={
+                                <button
+                                  type="button"
+                                  className="inline-flex items-center"
+                                  aria-label="Workspace defaults applied"
+                                />
+                              }
+                            >
+                              <Badge
+                                variant={workspaceDefaultsSuppressed ? "secondary" : "outline"}
+                                size="sm"
+                                className="shrink-0"
+                              >
+                                {workspaceDefaultsSuppressed
+                                  ? "repo defaults off"
+                                  : "repo defaults"}
+                              </Badge>
+                            </PopoverTrigger>
+                            <PopoverPopup
+                              tooltipStyle
+                              side="top"
+                              align="end"
+                              className="max-w-64 px-3 py-2"
+                            >
+                              <div className="space-y-1.5">
+                                <div className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+                                  {workspaceDefaultsSuppressed
+                                    ? "Workspace defaults muted"
+                                    : "Workspace defaults applied"}
+                                </div>
+                                {workspaceDefaultStatusItems.length > 0 ? (
+                                  <div className="flex flex-wrap gap-1">
+                                    {workspaceDefaultStatusItems.map((item) => (
+                                      <Badge key={item} variant="secondary" size="sm">
+                                        {item}
+                                      </Badge>
+                                    ))}
+                                  </div>
+                                ) : (
+                                  <p className="text-xs text-muted-foreground">
+                                    Repo-local Codex defaults are available but not active for this
+                                    draft.
+                                  </p>
+                                )}
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="outline"
+                                  className="h-7 rounded-full px-2.5 text-xs"
+                                  onClick={toggleWorkspaceDefaultsForDraft}
+                                >
+                                  {workspaceDefaultsSuppressed
+                                    ? "Use repo defaults again"
+                                    : "Ignore for this draft"}
+                                </Button>
+                              </div>
+                            </PopoverPopup>
+                          </Popover>
+                        ) : null}
                         {isPreparingWorktree ? (
                           <span className="text-muted-foreground/70 text-xs">
                             Preparing worktree...
@@ -4257,6 +4809,45 @@ export default function ChatView({ threadId }: ChatViewProps) {
               onPrepared={handlePreparedPullRequestThread}
             />
           ) : null}
+          <DoctorDialog
+            open={doctorDialogOpen}
+            onOpenChange={setDoctorDialogOpen}
+            activeProjectName={activeProject?.name}
+            activeProjectPath={activeProject?.cwd ?? null}
+            activeThreadTitle={activeThread.title}
+            projectSpecialization={projectSpecialization}
+            workProfileLabel={activeWorkProfile.label}
+            selectedProvider={selectedProvider}
+            runtimeMode={runtimeMode}
+            interactionMode={interactionMode}
+            selectedWorkspaceCodexProfileName={composerDraft.workspaceCodexProfileName}
+            suggestedWorkspaceCodexProfileName={suggestedWorkspaceCodexProfile?.name ?? null}
+            workspaceDefaultsSuppressed={workspaceDefaultsSuppressed}
+            workspaceCodexSummary={workspaceCodexSummary}
+            serverCwd={serverConfigQuery.data?.cwd ?? null}
+            keybindingsConfigPath={serverConfigQuery.data?.keybindingsConfigPath ?? null}
+            availableEditors={availableEditors}
+            serverIssues={serverConfigQuery.data?.issues ?? []}
+            providers={providerStatuses}
+          />
+          <HandoffDialog
+            open={handoffDialogOpen}
+            onOpenChange={setHandoffDialogOpen}
+            activeThreadTitle={activeThread.title}
+            activeProjectName={activeProject?.name}
+            activeProjectPath={activeProject?.cwd ?? null}
+            projectSpecialization={projectSpecialization}
+            workProfileLabel={activeWorkProfile.label}
+            selectedProvider={selectedProvider}
+            runtimeMode={runtimeMode}
+            interactionMode={interactionMode}
+            selectedWorkspaceCodexProfileName={composerDraft.workspaceCodexProfileName}
+            suggestedWorkspaceCodexProfileName={suggestedWorkspaceCodexProfile?.name ?? null}
+            workspaceDefaultsSuppressed={workspaceDefaultsSuppressed}
+            preflight={resolvedWorkProfilePreflight}
+            prompt={prompt}
+            workspaceCodexSummary={workspaceCodexSummary}
+          />
         </div>
         {/* end chat column */}
 

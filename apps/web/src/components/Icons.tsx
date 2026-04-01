@@ -20,6 +20,32 @@ export const CursorIcon: Icon = (props) => (
   </svg>
 );
 
+export const DroidIcon: Icon = (props) => (
+  <svg {...props} viewBox="0 0 24 24" fill="none">
+    <path d="M12 2.75 19 6.75v10.5l-7 4-7-4V6.75l7-4Z" fill="currentColor" opacity="0.2" />
+    <path
+      d="M12 2.75 19 6.75v10.5l-7 4-7-4V6.75l7-4Z"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinejoin="round"
+    />
+    <path
+      d="M9 8.75h3.35c1.93 0 3.15 1.12 3.15 3.25s-1.22 3.25-3.15 3.25H9v-6.5Z"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+    <path
+      d="M11.8 8.75 15.5 12l-3.7 3.25"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </svg>
+);
+
 export const VisualStudioCode: Icon = (props) => {
   const id = useId();
   const maskId = `${id}-vscode-a`;

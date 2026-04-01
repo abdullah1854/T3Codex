@@ -102,6 +102,51 @@ export function ContextWindowMeter(props: { usage: ContextWindowSnapshot }) {
               tokens
             </div>
           ) : null}
+          {(usage.lastUsedTokens ?? 0) > 0 && (
+            <div className="border-t border-border/60 pt-1.5">
+              <div className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+                Last turn
+              </div>
+              <div className="mt-0.5 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0 text-xs">
+                <span className="text-muted-foreground">Total</span>
+                <span className="text-right font-medium text-foreground">
+                  {formatContextWindowTokens(usage.lastUsedTokens ?? null)}
+                </span>
+                {(usage.lastInputTokens ?? 0) > 0 && (
+                  <>
+                    <span className="text-muted-foreground">Input</span>
+                    <span className="text-right text-muted-foreground">
+                      {formatContextWindowTokens(usage.lastInputTokens ?? null)}
+                    </span>
+                  </>
+                )}
+                {(usage.lastCachedInputTokens ?? 0) > 0 && (
+                  <>
+                    <span className="text-muted-foreground">Cached</span>
+                    <span className="text-right text-muted-foreground">
+                      {formatContextWindowTokens(usage.lastCachedInputTokens ?? null)}
+                    </span>
+                  </>
+                )}
+                {(usage.lastOutputTokens ?? 0) > 0 && (
+                  <>
+                    <span className="text-muted-foreground">Output</span>
+                    <span className="text-right text-muted-foreground">
+                      {formatContextWindowTokens(usage.lastOutputTokens ?? null)}
+                    </span>
+                  </>
+                )}
+                {(usage.lastReasoningOutputTokens ?? 0) > 0 && (
+                  <>
+                    <span className="text-muted-foreground">Reasoning</span>
+                    <span className="text-right text-muted-foreground">
+                      {formatContextWindowTokens(usage.lastReasoningOutputTokens ?? null)}
+                    </span>
+                  </>
+                )}
+              </div>
+            </div>
+          )}
           {usage.compactsAutomatically ? (
             <div className="text-xs text-muted-foreground">
               Automatically compacts its context when needed.

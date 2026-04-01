@@ -29,6 +29,7 @@ export const PROVIDER_OPTIONS: Array<{
 }> = [
   { value: "codex", label: "Codex", available: true },
   { value: "claudeAgent", label: "Claude", available: true },
+  { value: "droid", label: "Droid", available: true },
   { value: "cursor", label: "Cursor", available: false },
 ];
 
@@ -55,6 +56,7 @@ export interface PendingApproval {
   requestKind: "command" | "file-read" | "file-change";
   createdAt: string;
   detail?: string;
+  args?: unknown;
 }
 
 export interface PendingUserInput {
@@ -101,6 +103,12 @@ export type TimelineEntry =
       kind: "work";
       createdAt: string;
       entry: WorkLogEntry;
+    }
+  | {
+      id: string;
+      kind: "compaction";
+      createdAt: string;
+      summary: string;
     };
 
 export function formatDuration(durationMs: number): string {
@@ -204,6 +212,7 @@ export function derivePendingApprovals(
           ? requestKindFromRequestType(payload.requestType)
           : null;
     const detail = payload && typeof payload.detail === "string" ? payload.detail : undefined;
+    const args = payload?.args;
 
     if (activity.kind === "approval.requested" && requestId && requestKind) {
       openByRequestId.set(requestId, {
@@ -211,6 +220,7 @@ export function derivePendingApprovals(
         requestKind,
         createdAt: activity.createdAt,
         ...(detail ? { detail } : {}),
+        ...(args !== undefined ? { args } : {}),
       });
       continue;
     }
@@ -828,6 +838,7 @@ export function deriveTimelineEntries(
   messages: ChatMessage[],
   proposedPlans: ProposedPlan[],
   workEntries: WorkLogEntry[],
+  activities?: ReadonlyArray<OrchestrationThreadActivity>,
 ): TimelineEntry[] {
   const messageRows: TimelineEntry[] = messages.map((message) => ({
     id: message.id,
@@ -847,7 +858,15 @@ export function deriveTimelineEntries(
     createdAt: entry.createdAt,
     entry,
   }));
-  return [...messageRows, ...proposedPlanRows, ...workRows].toSorted((a, b) =>
+  const compactionRows: TimelineEntry[] = (activities ?? [])
+    .filter((activity) => activity.kind === "context-compaction")
+    .map((activity) => ({
+      id: `compaction:${activity.id}`,
+      kind: "compaction" as const,
+      createdAt: activity.createdAt,
+      summary: activity.summary,
+    }));
+  return [...messageRows, ...proposedPlanRows, ...workRows, ...compactionRows].toSorted((a, b) =>
     a.createdAt.localeCompare(b.createdAt),
   );
 }

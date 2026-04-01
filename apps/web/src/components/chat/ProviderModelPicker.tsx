@@ -2,7 +2,6 @@ import { type ProviderKind, type ServerProvider } from "@t3tools/contracts";
 import { resolveSelectableModel } from "@t3tools/shared/model";
 import { memo, useState } from "react";
 import type { VariantProps } from "class-variance-authority";
-import { type ProviderPickerKind, PROVIDER_OPTIONS } from "../../session-logic";
 import { ChevronDownIcon } from "lucide-react";
 import { Button, buttonVariants } from "../ui/button";
 import {
@@ -18,36 +17,41 @@ import {
   MenuSubTrigger,
   MenuTrigger,
 } from "../ui/menu";
-import { ClaudeAI, CursorIcon, Gemini, Icon, OpenAI, OpenCodeIcon } from "../Icons";
+import { ClaudeAI, CursorIcon, DroidIcon, Gemini, Icon, OpenAI, OpenCodeIcon } from "../Icons";
 import { cn } from "~/lib/utils";
 import { getProviderSnapshot } from "../../providerModels";
+import {
+  AVAILABLE_PROVIDER_OPTIONS,
+  COMING_SOON_PROVIDER_OPTIONS,
+  getProviderAvailability,
+  type ProviderPickerKind,
+  UNAVAILABLE_PROVIDER_OPTIONS,
+} from "../../providerCatalog";
 
-function isAvailableProviderOption(option: (typeof PROVIDER_OPTIONS)[number]): option is {
-  value: ProviderKind;
-  label: string;
-  available: true;
-} {
-  return option.available;
-}
+export { AVAILABLE_PROVIDER_OPTIONS } from "../../providerCatalog";
 
 const PROVIDER_ICON_BY_PROVIDER: Record<ProviderPickerKind, Icon> = {
   codex: OpenAI,
   claudeAgent: ClaudeAI,
+  droid: DroidIcon,
   cursor: CursorIcon,
 };
-
-export const AVAILABLE_PROVIDER_OPTIONS = PROVIDER_OPTIONS.filter(isAvailableProviderOption);
-const UNAVAILABLE_PROVIDER_OPTIONS = PROVIDER_OPTIONS.filter((option) => !option.available);
-const COMING_SOON_PROVIDER_OPTIONS = [
-  { id: "opencode", label: "OpenCode", icon: OpenCodeIcon },
-  { id: "gemini", label: "Gemini", icon: Gemini },
-] as const;
+const COMING_SOON_PROVIDER_ICONS = {
+  opencode: OpenCodeIcon,
+  gemini: Gemini,
+} as const;
 
 function providerIconClassName(
   provider: ProviderKind | ProviderPickerKind,
   fallbackClassName: string,
 ): string {
-  return provider === "claudeAgent" ? "text-[#d97757]" : fallbackClassName;
+  if (provider === "claudeAgent") {
+    return "text-[#d97757]";
+  }
+  if (provider === "droid") {
+    return "text-[#d9485f]";
+  }
+  return fallbackClassName;
 }
 
 export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
@@ -151,14 +155,14 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
               const liveProvider = props.providers
                 ? getProviderSnapshot(props.providers, option.value)
                 : undefined;
-              if (liveProvider && liveProvider.status !== "ready") {
-                const unavailableLabel = !liveProvider.enabled
-                  ? "Disabled"
-                  : !liveProvider.installed
-                    ? "Not installed"
-                    : "Unavailable";
+              const availability = getProviderAvailability(liveProvider);
+              if (!availability.selectable) {
                 return (
-                  <MenuItem key={option.value} disabled>
+                  <MenuItem
+                    key={option.value}
+                    disabled
+                    title={availability.message ?? option.description}
+                  >
                     <OptionIcon
                       aria-hidden="true"
                       className={cn(
@@ -168,7 +172,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
                     />
                     <span>{option.label}</span>
                     <span className="ms-auto text-[11px] text-muted-foreground/80 uppercase tracking-[0.08em]">
-                      {unavailableLabel}
+                      {availability.badgeLabel ?? "Unavailable"}
                     </span>
                   </MenuItem>
                 );
@@ -210,7 +214,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
             {UNAVAILABLE_PROVIDER_OPTIONS.map((option) => {
               const OptionIcon = PROVIDER_ICON_BY_PROVIDER[option.value];
               return (
-                <MenuItem key={option.value} disabled>
+                <MenuItem key={option.value} disabled title={option.description}>
                   <OptionIcon
                     aria-hidden="true"
                     className="size-4 shrink-0 text-muted-foreground/85 opacity-80"
@@ -224,9 +228,9 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
             })}
             {UNAVAILABLE_PROVIDER_OPTIONS.length === 0 && <MenuDivider />}
             {COMING_SOON_PROVIDER_OPTIONS.map((option) => {
-              const OptionIcon = option.icon;
+              const OptionIcon = COMING_SOON_PROVIDER_ICONS[option.id];
               return (
-                <MenuItem key={option.id} disabled>
+                <MenuItem key={option.id} disabled title={option.description}>
                   <OptionIcon aria-hidden="true" className="size-4 shrink-0 opacity-80" />
                   <span>{option.label}</span>
                   <span className="ms-auto text-[11px] text-muted-foreground/80 uppercase tracking-[0.08em]">

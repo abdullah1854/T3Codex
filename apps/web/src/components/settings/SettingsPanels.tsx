@@ -42,6 +42,7 @@ import {
 } from "../../lib/desktopUpdateReactQuery";
 import { serverConfigQueryOptions, serverQueryKeys } from "../../lib/serverReactQuery";
 import {
+  buildModelSelection,
   MAX_CUSTOM_MODEL_LENGTH,
   getCustomModelOptionsByProvider,
   resolveAppModelSelectionState,
@@ -59,6 +60,7 @@ import { Switch } from "../ui/switch";
 import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { ProjectFavicon } from "../ProjectFavicon";
+import { WORK_PROFILES, getWorkProfileDefinition } from "~/workProfiles";
 
 const THEME_OPTIONS = [
   {
@@ -108,6 +110,12 @@ const PROVIDER_SETTINGS: readonly InstallProviderSettings[] = [
     title: "Claude",
     binaryPlaceholder: "Claude binary path",
     binaryDescription: "Path to the Claude binary",
+  },
+  {
+    provider: "droid",
+    title: "Droid",
+    binaryPlaceholder: "Droid binary path",
+    binaryDescription: "Path to the Droid binary",
   },
 ] as const;
 
@@ -530,12 +538,17 @@ export function GeneralSettingsPanel() {
         DEFAULT_UNIFIED_SETTINGS.providers.claudeAgent.binaryPath ||
       settings.providers.claudeAgent.customModels.length > 0,
     ),
+    droid: Boolean(
+      settings.providers.droid.binaryPath !== DEFAULT_UNIFIED_SETTINGS.providers.droid.binaryPath ||
+      settings.providers.droid.customModels.length > 0,
+    ),
   });
   const [customModelInputByProvider, setCustomModelInputByProvider] = useState<
     Record<ProviderKind, string>
   >({
     codex: "",
     claudeAgent: "",
+    droid: "",
   });
   const [customModelErrorByProvider, setCustomModelErrorByProvider] = useState<
     Partial<Record<ProviderKind, string | null>>
@@ -815,6 +828,47 @@ export function GeneralSettingsPanel() {
         />
 
         <SettingsRow
+          title="Default workflow"
+          description="Pick the Abdullah-style profile that new drafts should start from."
+          resetAction={
+            settings.defaultWorkProfileId !== DEFAULT_UNIFIED_SETTINGS.defaultWorkProfileId ? (
+              <SettingResetButton
+                label="default workflow"
+                onClick={() =>
+                  updateSettings({
+                    defaultWorkProfileId: DEFAULT_UNIFIED_SETTINGS.defaultWorkProfileId,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Select
+              value={settings.defaultWorkProfileId}
+              onValueChange={(value) => {
+                const nextProfile = WORK_PROFILES.find((profile) => profile.id === value);
+                if (nextProfile) {
+                  updateSettings({ defaultWorkProfileId: nextProfile.id });
+                }
+              }}
+            >
+              <SelectTrigger className="w-full sm:w-44" aria-label="Default workflow profile">
+                <SelectValue>
+                  {getWorkProfileDefinition(settings.defaultWorkProfileId).label}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectPopup align="end" alignItemWithTrigger={false}>
+                {WORK_PROFILES.map((profile) => (
+                  <SelectItem hideIndicator key={profile.id} value={profile.id}>
+                    {profile.label}
+                  </SelectItem>
+                ))}
+              </SelectPopup>
+            </Select>
+          }
+        />
+
+        <SettingsRow
           title="Diff line wrapping"
           description="Set the default wrap state when the diff panel opens."
           resetAction={
@@ -989,7 +1043,7 @@ export function GeneralSettingsPanel() {
                     textGenerationModelSelection: resolveAppModelSelectionState(
                       {
                         ...settings,
-                        textGenerationModelSelection: { provider, model },
+                        textGenerationModelSelection: buildModelSelection(provider, model),
                       },
                       serverProviders,
                     ),
@@ -1014,11 +1068,11 @@ export function GeneralSettingsPanel() {
                     textGenerationModelSelection: resolveAppModelSelectionState(
                       {
                         ...settings,
-                        textGenerationModelSelection: {
-                          provider: textGenProvider,
-                          model: textGenModel,
-                          ...(nextOptions ? { options: nextOptions } : {}),
-                        },
+                        textGenerationModelSelection: buildModelSelection(
+                          textGenProvider,
+                          textGenModel,
+                          nextOptions,
+                        ),
                       },
                       serverProviders,
                     ),
