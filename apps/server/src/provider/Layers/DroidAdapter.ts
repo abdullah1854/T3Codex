@@ -342,6 +342,19 @@ export const makeDroidAdapterLive = (options?: DroidAdapterLiveOptions) =>
               ...context.session,
               resumeCursor: { sessionId: droidSessionId },
             };
+            emitFromCallback({
+              type: "session.configured",
+              eventId: makeEventId("droid-session-configured"),
+              provider: PROVIDER,
+              threadId: context.session.threadId,
+              createdAt,
+              payload: {
+                config: {
+                  sessionId: droidSessionId,
+                  resumeCursor: { sessionId: droidSessionId },
+                },
+              },
+            });
           }
           return;
         }

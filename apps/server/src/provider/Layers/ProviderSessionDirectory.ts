@@ -22,13 +22,20 @@ function decodeProviderKind(
   providerName: string,
   operation: string,
 ): Effect.Effect<ProviderKind, ProviderSessionDirectoryPersistenceError> {
-  if (providerName === "codex" || providerName === "claudeAgent") {
-    return Effect.succeed(providerName);
+  const normalizedProviderName =
+    typeof providerName === "string" ? providerName.trim() : String(providerName).trim();
+
+  if (
+    normalizedProviderName === "codex" ||
+    normalizedProviderName === "claudeAgent" ||
+    normalizedProviderName === "droid"
+  ) {
+    return Effect.succeed(normalizedProviderName);
   }
   return Effect.fail(
     new ProviderSessionDirectoryPersistenceError({
       operation,
-      detail: `Unknown persisted provider '${providerName}'.`,
+      detail: `Unknown persisted provider '${normalizedProviderName}'.`,
     }),
   );
 }

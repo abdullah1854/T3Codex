@@ -179,8 +179,49 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
     const adapters = yield* Effect.forEach(providers, (provider) =>
       registry.getByProvider(provider),
     );
+    const syncBindingFromRuntimeEvent = (event: ProviderRuntimeEvent): Effect.Effect<void> => {
+      if (
+        event.type !== "session.started" &&
+        event.type !== "session.configured" &&
+        event.type !== "session.state.changed" &&
+        event.type !== "turn.completed" &&
+        event.type !== "turn.aborted"
+      ) {
+        return Effect.void;
+      }
+
+      return Effect.gen(function* () {
+        const adapter = yield* registry.getByProvider(event.provider);
+        const hasSession = yield* adapter.hasSession(event.threadId);
+        if (!hasSession) {
+          return;
+        }
+
+        const session = (yield* adapter.listSessions()).find(
+          (candidate) => candidate.threadId === event.threadId,
+        );
+        if (!session) {
+          return;
+        }
+
+        yield* upsertSessionBinding(session, event.threadId, {
+          lastRuntimeEvent: event.type,
+          lastRuntimeEventAt: event.createdAt,
+        });
+      }).pipe(
+        Effect.catch((cause) =>
+          Effect.logWarning("failed to sync provider session binding from runtime event", {
+            cause,
+            provider: event.provider,
+            threadId: event.threadId,
+            eventType: event.type,
+          }),
+        ),
+      );
+    };
+
     const processRuntimeEvent = (event: ProviderRuntimeEvent): Effect.Effect<void> =>
-      publishRuntimeEvent(event);
+      syncBindingFromRuntimeEvent(event).pipe(Effect.flatMap(() => publishRuntimeEvent(event)));
 
     const worker = Effect.forever(
       Queue.take(runtimeEventQueue).pipe(Effect.flatMap(processRuntimeEvent)),
@@ -218,13 +259,6 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           }
         }
 
-        if (!hasResumeCursor) {
-          return yield* toValidationError(
-            input.operation,
-            `Cannot recover thread '${input.binding.threadId}' because no provider resume state is persisted.`,
-          );
-        }
-
         const persistedCwd = readPersistedCwd(input.binding.runtimePayload);
         const persistedModelSelection = readPersistedModelSelection(input.binding.runtimePayload);
 
@@ -246,7 +280,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         yield* upsertSessionBinding(resumed, input.binding.threadId);
         yield* analytics.record("provider.session.recovered", {
           provider: resumed.provider,
-          strategy: "resume-thread",
+          strategy: hasResumeCursor ? "resume-thread" : "restart-without-resume",
           hasResumeCursor: resumed.resumeCursor !== undefined,
         });
         return { adapter, session: resumed } as const;
