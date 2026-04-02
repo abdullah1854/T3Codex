@@ -170,15 +170,11 @@ export function PullRequestThreadDialog({
           : null);
 
   return (
-    <Dialog
-      open={open}
-      onOpenChange={(nextOpen) => {
-        if (!preparePullRequestThreadMutation.isPending) {
-          onOpenChange(nextOpen);
-        }
-      }}
-    >
-      <DialogPopup className="max-w-xl">
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogPopup
+        className="max-w-xl"
+        showCloseButton={!preparePullRequestThreadMutation.isPending}
+      >
         <DialogHeader>
           <DialogTitle>Checkout Pull Request</DialogTitle>
           <DialogDescription>

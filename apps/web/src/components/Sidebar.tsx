@@ -1456,7 +1456,7 @@ export default function Sidebar() {
                       <button
                         type="button"
                         aria-label={prStatus.tooltip}
-                        className={`inline-flex items-center justify-center ${prStatus.colorClass} cursor-pointer rounded-sm outline-hidden focus-visible:ring-1 focus-visible:ring-ring`}
+                        className={`inline-flex items-center justify-center ${prStatus.colorClass} cursor-pointer rounded-sm outline-hidden focus-visible:ring-2 focus-visible:ring-ring`}
                         onClick={(event) => {
                           openPrLink(event, prStatus.url);
                         }}
@@ -1554,7 +1554,7 @@ export default function Sidebar() {
                         data-thread-selection-safe
                         data-testid={`thread-archive-${thread.id}`}
                         aria-label={`Archive ${thread.title}`}
-                        className="inline-flex size-5 cursor-pointer items-center justify-center text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
+                        className="inline-flex size-5 cursor-pointer items-center justify-center text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
                         onPointerDown={(event) => {
                           event.stopPropagation();
                         }}
@@ -1580,7 +1580,7 @@ export default function Sidebar() {
                               data-thread-selection-safe
                               data-testid={`thread-archive-${thread.id}`}
                               aria-label={`Archive ${thread.title}`}
-                              className="inline-flex size-5 cursor-pointer items-center justify-center text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
+                              className="inline-flex size-5 cursor-pointer items-center justify-center text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
                               onPointerDown={(event) => {
                                 event.stopPropagation();
                               }}
@@ -1955,7 +1955,7 @@ export default function Sidebar() {
               <span className="truncate text-sm font-medium tracking-tight text-muted-foreground">
                 Code
               </span>
-              <span className="rounded-full bg-muted/50 px-1.5 py-0.5 text-[8px] font-medium uppercase tracking-[0.18em] text-muted-foreground/60">
+              <span className="shrink-0 rounded-full bg-muted/50 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-[0.18em] text-muted-foreground/60">
                 {APP_STAGE_LABEL}
               </span>
             </div>
@@ -2066,10 +2066,10 @@ export default function Sidebar() {
                   <div className="flex gap-1.5">
                     <input
                       ref={addProjectInputRef}
-                      className={`min-w-0 flex-1 rounded-md border bg-secondary px-2 py-1 font-mono text-xs text-foreground placeholder:text-muted-foreground/40 focus:outline-none ${
+                      className={`min-w-0 flex-1 rounded-md border bg-secondary px-2 py-1 font-mono text-xs text-foreground placeholder:text-muted-foreground/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
                         addProjectError
-                          ? "border-red-500/70 focus:border-red-500"
-                          : "border-border focus:border-ring"
+                          ? "border-destructive/70 focus-visible:border-destructive"
+                          : "border-border focus-visible:border-ring"
                       }`}
                       placeholder="/path/to/project"
                       value={newCwd}
@@ -2096,7 +2096,7 @@ export default function Sidebar() {
                     </button>
                   </div>
                   {addProjectError && (
-                    <p className="mt-1 px-0.5 text-[11px] leading-tight text-red-400">
+                    <p className="mt-1 px-0.5 text-[11px] leading-tight text-destructive">
                       {addProjectError}
                     </p>
                   )}

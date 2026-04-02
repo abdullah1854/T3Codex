@@ -278,9 +278,7 @@ function SettingsRow({
           {status ? <div className="pt-1 text-[11px] text-muted-foreground">{status}</div> : null}
         </div>
         {control ? (
-          <div className="flex w-full shrink-0 items-center gap-2 sm:w-auto sm:justify-end">
-            {control}
-          </div>
+          <div className="flex w-fit shrink-0 items-center gap-2 sm:justify-end">{control}</div>
         ) : null}
       </div>
       {children}
@@ -1315,7 +1313,7 @@ export function GeneralSettingsPanel() {
                           return (
                             <div
                               key={`${providerCard.provider}:${model.slug}`}
-                              className="flex items-center gap-2 py-1"
+                              className="flex min-w-0 items-center gap-2 py-1"
                             >
                               <span className="min-w-0 truncate text-xs text-foreground/90">
                                 {model.name}

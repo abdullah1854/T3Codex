@@ -106,31 +106,31 @@ function joinWorkspacePath(workspaceRoot: string, relativePath: string): string 
 
 function toneClassName(tone: ReturnType<typeof deriveInstructionLayers>[number]["tone"]) {
   if (tone === "active") {
-    return "border-emerald-200/80 bg-emerald-50/70";
+    return "border-success/30 bg-success/8";
   }
   if (tone === "missing") {
-    return "border-rose-200/80 bg-rose-50/80";
+    return "border-destructive/30 bg-destructive/8";
   }
   if (tone === "muted") {
-    return "border-amber-200/80 bg-amber-50/80";
+    return "border-warning/30 bg-warning/8";
   }
-  return "border-sky-200/80 bg-sky-50/70";
+  return "border-info/30 bg-info/8";
 }
 
 function verificationStatusBadgeClassName(
   status: ReturnType<typeof deriveVerificationSummary>["status"],
 ) {
   if (status === "passed") {
-    return "border-emerald-200 bg-emerald-50 text-emerald-700";
+    return "border-success/30 bg-success/10 text-success-foreground";
   }
   if (status === "failed") {
-    return "border-rose-200 bg-rose-50 text-rose-700";
+    return "border-destructive/30 bg-destructive/10 text-destructive-foreground";
   }
   if (status === "running") {
-    return "border-sky-200 bg-sky-50 text-sky-700";
+    return "border-info/30 bg-info/10 text-info-foreground";
   }
   if (status === "pending") {
-    return "border-amber-200 bg-amber-50 text-amber-700";
+    return "border-warning/30 bg-warning/10 text-warning-foreground";
   }
   return "border-muted bg-muted/60 text-muted-foreground";
 }
@@ -152,25 +152,25 @@ function formatSessionStatusLabel(status: OrchestrationSessionStatus | null) {
 
 function reviewReadinessBadgeClassName(status: ReviewReadinessSummary["status"]) {
   if (status === "ready") {
-    return "border-emerald-200 bg-emerald-50 text-emerald-700";
+    return "border-success/30 bg-success/10 text-success-foreground";
   }
   if (status === "attention") {
-    return "border-rose-200 bg-rose-50 text-rose-700";
+    return "border-destructive/30 bg-destructive/10 text-destructive-foreground";
   }
-  return "border-amber-200 bg-amber-50 text-amber-700";
+  return "border-warning/30 bg-warning/10 text-warning-foreground";
 }
 
 function reviewItemToneClassName(status: ReviewReadinessSummary["items"][number]["status"]) {
   if (status === "good") {
-    return "border-emerald-200/80 bg-emerald-50/70";
+    return "border-success/30 bg-success/8";
   }
   if (status === "attention") {
-    return "border-rose-200/80 bg-rose-50/70";
+    return "border-destructive/30 bg-destructive/8";
   }
   if (status === "pending") {
-    return "border-amber-200/80 bg-amber-50/70";
+    return "border-warning/30 bg-warning/8";
   }
-  return "border-sky-200/80 bg-sky-50/70";
+  return "border-info/30 bg-info/8";
 }
 
 function previewForText(contents: string) {
@@ -384,8 +384,8 @@ export function AgentWorkbenchDialog({
           </DialogDescription>
         </DialogHeader>
         <DialogPanel className="space-y-4">
-          <div className="grid gap-3 rounded-2xl border border-border/70 bg-[linear-gradient(135deg,rgba(240,249,255,0.96),rgba(255,255,255,0.92))] p-4 sm:grid-cols-2 xl:grid-cols-4">
-            <div className="rounded-xl border border-white/50 bg-white/70 p-3 backdrop-blur">
+          <div className="grid gap-3 rounded-2xl border border-border/70 bg-muted/30 p-4 sm:grid-cols-2 xl:grid-cols-4">
+            <div className="rounded-xl border border-border/50 bg-card/70 p-3 backdrop-blur">
               <div className="flex items-center gap-2 text-foreground">
                 <ShieldCheckIcon className="size-4" />
                 <span className="font-medium text-sm">Instruction stack</span>
@@ -395,7 +395,7 @@ export function AgentWorkbenchDialog({
                 for {activeThreadTitle}.
               </p>
             </div>
-            <div className="rounded-xl border border-white/50 bg-white/70 p-3 backdrop-blur">
+            <div className="rounded-xl border border-border/50 bg-card/70 p-3 backdrop-blur">
               <div className="flex items-center gap-2 text-foreground">
                 <ListChecksIcon className="size-4" />
                 <span className="font-medium text-sm">Verification</span>
@@ -406,14 +406,14 @@ export function AgentWorkbenchDialog({
                   : "No recommended verification scripts have been configured yet."}
               </p>
             </div>
-            <div className="rounded-xl border border-white/50 bg-white/70 p-3 backdrop-blur">
+            <div className="rounded-xl border border-border/50 bg-card/70 p-3 backdrop-blur">
               <div className="flex items-center gap-2 text-foreground">
                 <CheckCircle2Icon className="size-4" />
                 <span className="font-medium text-sm">Review package</span>
               </div>
               <p className="mt-2 text-sm text-muted-foreground">{reviewReadiness.headline}</p>
             </div>
-            <div className="rounded-xl border border-white/50 bg-white/70 p-3 backdrop-blur">
+            <div className="rounded-xl border border-border/50 bg-card/70 p-3 backdrop-blur">
               <div className="flex items-center gap-2 text-foreground">
                 <FolderTreeIcon className="size-4" />
                 <span className="font-medium text-sm">Workspace review</span>
@@ -648,11 +648,11 @@ export function AgentWorkbenchDialog({
                               </div>
                             </CardHeader>
                             <CardContent className="space-y-3">
-                              <pre className="overflow-x-auto rounded-xl border border-black/5 bg-black/[0.03] px-3 py-2 text-xs leading-6 text-foreground/80">
+                              <pre className="overflow-x-auto rounded-xl border border-border/70 bg-muted/40 px-3 py-2 text-xs leading-6 text-foreground/80">
                                 {script.command}
                               </pre>
                               {run ? (
-                                <div className="rounded-xl border border-black/5 bg-white/70 px-3 py-2 text-sm">
+                                <div className="rounded-xl border border-border/70 bg-card/70 px-3 py-2 text-sm">
                                   <p className="font-medium text-foreground">
                                     {run.status === "passed"
                                       ? "Passed"
@@ -664,7 +664,7 @@ export function AgentWorkbenchDialog({
                                     Started {new Date(run.startedAt).toLocaleString()}
                                   </p>
                                   {run.error ? (
-                                    <p className="mt-1 text-rose-700">{run.error}</p>
+                                    <p className="mt-1 text-destructive-foreground">{run.error}</p>
                                   ) : run.exitCode !== null ? (
                                     <p className="mt-1 text-muted-foreground">
                                       Exit code {run.exitCode}
@@ -1107,9 +1107,9 @@ export function AgentWorkbenchDialog({
                       ) : null}
                     </div>
                   ) : selectedWorkspaceEntry?.kind === "file" ? (
-                    <div className="min-h-0 overflow-hidden rounded-xl border border-border/70 bg-[#fafaf6]">
+                    <div className="min-h-0 overflow-hidden rounded-xl border border-border/70 bg-muted/30">
                       <ScrollArea className="h-[420px]">
-                        <pre className="whitespace-pre-wrap break-words p-4 font-mono text-xs leading-6 text-slate-800">
+                        <pre className="whitespace-pre-wrap break-words p-4 font-mono text-xs leading-6 text-foreground">
                           {workspacePreviewQuery.isFetching
                             ? "Loading preview..."
                             : preview.text.length > 0
@@ -1118,7 +1118,7 @@ export function AgentWorkbenchDialog({
                         </pre>
                       </ScrollArea>
                       {preview.truncated ? (
-                        <div className="border-t border-border/70 bg-white/80 px-4 py-2 text-xs text-muted-foreground">
+                        <div className="border-t border-border/70 bg-card/80 px-4 py-2 text-xs text-muted-foreground">
                           Preview is truncated. Open the file in your editor for the full contents.
                         </div>
                       ) : null}

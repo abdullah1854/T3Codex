@@ -4974,7 +4974,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
       {/* Top bar */}
       <header
         className={cn(
-          "border-b border-border px-3 sm:px-5",
+          "overflow-hidden border-b border-border px-3 sm:px-5",
           isElectron ? "drag-region flex h-[52px] items-center" : "py-2 sm:py-3",
         )}
       >
@@ -5799,7 +5799,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
               <ChevronLeftIcon className="size-5" />
             </Button>
           )}
-          <div className="relative isolate z-10 max-h-[92vh] max-w-[92vw]">
+          <div className="relative isolate z-10 max-h-[92vh] max-w-[92vw] overflow-hidden">
             <Button
               type="button"
               size="icon-xs"

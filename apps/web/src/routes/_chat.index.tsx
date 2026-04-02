@@ -1,7 +1,15 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { MessageSquareIcon } from "lucide-react";
 
 import { isElectron } from "../env";
 import { SidebarTrigger } from "../components/ui/sidebar";
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "../components/ui/empty";
 
 function ChatIndexRouteView() {
   return (
@@ -21,11 +29,17 @@ function ChatIndexRouteView() {
         </div>
       )}
 
-      <div className="flex flex-1 items-center justify-center">
-        <div className="text-center">
-          <p className="text-sm">Select a thread or create a new one to get started.</p>
-        </div>
-      </div>
+      <Empty>
+        <EmptyMedia variant="icon">
+          <MessageSquareIcon />
+        </EmptyMedia>
+        <EmptyHeader>
+          <EmptyTitle>No active thread</EmptyTitle>
+          <EmptyDescription>
+            Select a thread from the sidebar or create a new one to get started.
+          </EmptyDescription>
+        </EmptyHeader>
+      </Empty>
     </div>
   );
 }

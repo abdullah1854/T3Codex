@@ -46,11 +46,11 @@ interface DoctorDialogProps {
 function ProviderStatusBadge({ status }: { status: ServerProvider["status"] }) {
   const className =
     status === "ready"
-      ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+      ? "border-success/30 bg-success/10 text-success-foreground"
       : status === "warning"
-        ? "border-amber-200 bg-amber-50 text-amber-700"
+        ? "border-warning/30 bg-warning/10 text-warning-foreground"
         : status === "error"
-          ? "border-rose-200 bg-rose-50 text-rose-700"
+          ? "border-destructive/30 bg-destructive/10 text-destructive-foreground"
           : "border-muted bg-muted/60 text-muted-foreground";
 
   return (
@@ -123,16 +123,16 @@ export function DoctorDialog({
         </DialogHeader>
         <DialogPanel className="space-y-4">
           {warningRows.length > 0 ? (
-            <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+            <div className="rounded-xl border border-warning/30 bg-warning/8 p-3 text-sm text-warning-foreground">
               <p className="font-medium">Warnings</p>
-              <ul className="mt-2 space-y-1 text-amber-800">
+              <ul className="mt-2 space-y-1 text-warning-foreground/90">
                 {warningRows.map((warning) => (
                   <li key={warning}>• {warning}</li>
                 ))}
               </ul>
             </div>
           ) : (
-            <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">
+            <div className="rounded-xl border border-success/30 bg-success/8 p-3 text-sm text-success-foreground">
               Thread, workspace, and provider state look healthy.
             </div>
           )}
